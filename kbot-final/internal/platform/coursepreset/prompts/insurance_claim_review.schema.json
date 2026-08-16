@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claim_id", "review_goal", "execution_mode", "operator_instruction", "additional_context"],
+  "properties": {
+    "claim_id": {"type": "string", "description": "理赔案件号", "default": "CLM-2026-0001"},
+    "review_goal": {"type": "string", "description": "责任、材料或赔付审核目标", "default": "核验责任并给出最高可赔金额"},
+    "execution_mode": {
+      "type": "string",
+      "enum": ["analyze_only", "prepare_action", "execute_after_approval"],
+      "default": "analyze_only"
+    },
+    "operator_instruction": {"type": "string", "description": "理赔人员的明确业务要求", "default": "完整列出规则版本、理由码和金额计算依据"},
+    "additional_context": {"type": "string", "description": "额外背景；无内容时填写 N/A", "default": "课程标准案件，无额外材料"}
+  }
+}

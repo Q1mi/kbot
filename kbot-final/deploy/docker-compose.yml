@@ -1,0 +1,230 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "${KBOT_HTTP_PORT:-8080}:8080"
+    environment:
+      KBOT_ADDR: ":8080"
+      KBOT_CORS_ALLOWED_ORIGINS: ${KBOT_CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      KBOT_DATABASE_URL: postgres://kbot:kbot@db:5432/kbot?sslmode=disable
+      KBOT_REDIS_URL: redis://redis:6379/0
+      KBOT_SANDBOX_RUNNER_URL: http://sandbox-runner:8081
+      KBOT_SANDBOX_RUNNER_TOKEN: ${KBOT_SANDBOX_RUNNER_TOKEN:-kbot-dev-sandbox-runner-token-2026-minimum-32-chars}
+      KBOT_LLM_BASE_URL: ${KBOT_LLM_BASE_URL:-https://api.deepseek.com/v1}
+      KBOT_LLM_API_KEY: ${KBOT_LLM_API_KEY:-}   # 可选旧配置回退；从 .env 读，不进镜像
+      KBOT_LLM_MODEL: ${KBOT_LLM_MODEL:-deepseek-v4-pro}
+      KBOT_LLM_CHEAP_MODEL: ${KBOT_LLM_CHEAP_MODEL:-deepseek-v4-flash}
+      KBOT_JWT_SECRET_KEY: ${KBOT_JWT_SECRET_KEY:-dev-secret-key-32-chars-minimum}
+      KBOT_CREDENTIAL_ENCRYPTION_KEY: ${KBOT_CREDENTIAL_ENCRYPTION_KEY:-dev-credential-key-minimum-32-chars}
+      KBOT_OTLP_ENDPOINT: ${KBOT_OTLP_ENDPOINT:-}
+      KBOT_OTLP_HEADERS: ${KBOT_OTLP_HEADERS:-}
+      KBOT_OTEL_SAMPLE_RATIO: ${KBOT_OTEL_SAMPLE_RATIO:-1}
+      KBOT_OTEL_CAPTURE_CONTENT: ${KBOT_OTEL_CAPTURE_CONTENT:-false}
+      KBOT_SERVICE_VERSION: ${KBOT_SERVICE_VERSION:-dev}
+      KBOT_LANGFUSE_UI_URL: ${KBOT_LANGFUSE_UI_URL:-}
+      KBOT_LANGFUSE_PROJECT_ID: ${KBOT_LANGFUSE_PROJECT_ID:-}
+      KBOT_ENVIRONMENT: ${KBOT_ENVIRONMENT:-dev}
+      # 飞书事件订阅与自动回复（留空时集成端点失败关闭）。
+      KBOT_LARK_VERIFY_TOKEN: ${KBOT_LARK_VERIFY_TOKEN:-}
+      KBOT_LARK_ENCRYPT_KEY: ${KBOT_LARK_ENCRYPT_KEY:-}
+      KBOT_LARK_APP_ID: ${KBOT_LARK_APP_ID:-}
+      KBOT_LARK_APP_SECRET: ${KBOT_LARK_APP_SECRET:-}
+      KBOT_LARK_AGENT_ID: ${KBOT_LARK_AGENT_ID:-}
+      # 对象存储（MinIO）
+      KBOT_S3_ENDPOINT: http://minio:9000
+      KBOT_S3_BUCKET: ${KBOT_S3_BUCKET:-kbot}
+      KBOT_S3_ACCESS_KEY: ${KBOT_S3_ACCESS_KEY:-kbot}
+      KBOT_S3_SECRET_KEY: ${KBOT_S3_SECRET_KEY:-kbot123456}
+      # 本地 Ollama 通过 local-llm profile 按需启用;secret 分级缺少本地模型时失败关闭。
+      KBOT_OLLAMA_BASE_URL: ${KBOT_OLLAMA_BASE_URL:-}
+      KBOT_OLLAMA_MODEL: ${KBOT_OLLAMA_MODEL:-qwen2.5:7b}
+      # KB 向量化默认 local 离线,无需密钥
+      KBOT_EMBEDDER: ${KBOT_EMBEDDER:-local}
+      KBOT_EMBEDDER_DIM: ${KBOT_EMBEDDER_DIM:-1536}
+      KBOT_EMBEDDER_MODEL: ${KBOT_EMBEDDER_MODEL:-text-embedding-3-small}
+      KBOT_TOOL_ALLOWED_HOSTS: ${KBOT_TOOL_ALLOWED_HOSTS:-crossborder-sim,insurance-sim}
+      KBOT_TOOL_ALLOW_PRIVATE_NETWORK: ${KBOT_TOOL_ALLOW_PRIVATE_NETWORK:-false}
+      KBOT_KB_MARKDOWN_ALLOWED_ROOTS: ${KBOT_KB_MARKDOWN_ALLOWED_ROOTS:-/scenarios}
+      # 首启自动 seed admin（dev 默认开）
+      KBOT_AUTOSEED_ADMIN: ${KBOT_AUTOSEED_ADMIN:-true}
+      KBOT_AUTOSEED_ADMIN_EMAIL: ${KBOT_AUTOSEED_ADMIN_EMAIL:-admin@example.com}
+      KBOT_AUTOSEED_ADMIN_PASSWORD: ${KBOT_AUTOSEED_ADMIN_PASSWORD:-admin12345}
+      KBOT_AUTOSEED_COURSE_ASSETS: ${KBOT_AUTOSEED_COURSE_ASSETS:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully   # schema 先就位再起 app
+      sandbox-runner:
+        condition: service_healthy
+
+  # 独立 Sandbox 控制面：只有该服务可访问 Docker daemon。
+  # 执行容器固定禁网、只读根目录、非 root，并限制 CPU/内存/PID/超时/输出大小。
+  sandbox-runner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.sandbox-runner
+    environment:
+      KBOT_SANDBOX_RUNNER_ADDR: ":8081"
+      KBOT_SANDBOX_RUNNER_TOKEN: ${KBOT_SANDBOX_RUNNER_TOKEN:-kbot-dev-sandbox-runner-token-2026-minimum-32-chars}
+      KBOT_SANDBOX_PYTHON_IMAGE: ${KBOT_SANDBOX_PYTHON_IMAGE:-python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7}
+      KBOT_SANDBOX_BASH_IMAGE: ${KBOT_SANDBOX_BASH_IMAGE:-busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0}
+      KBOT_SANDBOX_MEMORY_MB: ${KBOT_SANDBOX_MEMORY_MB:-256}
+      KBOT_SANDBOX_CPUS: ${KBOT_SANDBOX_CPUS:-0.5}
+      KBOT_SANDBOX_PIDS_LIMIT: ${KBOT_SANDBOX_PIDS_LIMIT:-64}
+      KBOT_SANDBOX_TMPFS_MB: ${KBOT_SANDBOX_TMPFS_MB:-64}
+      KBOT_SANDBOX_TIMEOUT: ${KBOT_SANDBOX_TIMEOUT:-30s}
+      KBOT_SANDBOX_MAX_CODE_BYTES: ${KBOT_SANDBOX_MAX_CODE_BYTES:-65536}
+      KBOT_SANDBOX_MAX_OUTPUT_BYTES: ${KBOT_SANDBOX_MAX_OUTPUT_BYTES:-1048576}
+      KBOT_SANDBOX_MAX_CONCURRENT: ${KBOT_SANDBOX_MAX_CONCURRENT:-4}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # 迁移服务:db healthy 后跑一次 -up 即退出;app/worker 依赖其成功完成。
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.migrate
+    environment:
+      KBOT_DATABASE_URL: postgres://kbot:kbot@db:5432/kbot?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["-up"]
+    restart: "no"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    environment:
+      KBOT_DATABASE_URL: postgres://kbot:kbot@db:5432/kbot?sslmode=disable
+      KBOT_REDIS_URL: redis://redis:6379/0
+      KBOT_SANDBOX_RUNNER_URL: http://sandbox-runner:8081
+      KBOT_SANDBOX_RUNNER_TOKEN: ${KBOT_SANDBOX_RUNNER_TOKEN:-kbot-dev-sandbox-runner-token-2026-minimum-32-chars}
+      KBOT_LLM_BASE_URL: ${KBOT_LLM_BASE_URL:-https://api.deepseek.com/v1}
+      KBOT_LLM_API_KEY: ${KBOT_LLM_API_KEY:-}
+      KBOT_LLM_MODEL: ${KBOT_LLM_MODEL:-deepseek-v4-pro}
+      KBOT_LLM_CHEAP_MODEL: ${KBOT_LLM_CHEAP_MODEL:-deepseek-v4-flash}
+      KBOT_OLLAMA_BASE_URL: ${KBOT_OLLAMA_BASE_URL:-}
+      KBOT_OLLAMA_MODEL: ${KBOT_OLLAMA_MODEL:-qwen2.5:7b}
+      KBOT_JWT_SECRET_KEY: ${KBOT_JWT_SECRET_KEY:-dev-secret-key-32-chars-minimum}
+      KBOT_CREDENTIAL_ENCRYPTION_KEY: ${KBOT_CREDENTIAL_ENCRYPTION_KEY:-dev-credential-key-minimum-32-chars}
+      KBOT_OTLP_ENDPOINT: ${KBOT_OTLP_ENDPOINT:-}
+      KBOT_OTLP_HEADERS: ${KBOT_OTLP_HEADERS:-}
+      KBOT_OTEL_SAMPLE_RATIO: ${KBOT_OTEL_SAMPLE_RATIO:-1}
+      KBOT_OTEL_CAPTURE_CONTENT: ${KBOT_OTEL_CAPTURE_CONTENT:-false}
+      KBOT_SERVICE_VERSION: ${KBOT_SERVICE_VERSION:-dev}
+      KBOT_ENVIRONMENT: ${KBOT_ENVIRONMENT:-dev}
+      KBOT_S3_ENDPOINT: http://minio:9000
+      KBOT_S3_BUCKET: ${KBOT_S3_BUCKET:-kbot}
+      KBOT_S3_ACCESS_KEY: ${KBOT_S3_ACCESS_KEY:-kbot}
+      KBOT_S3_SECRET_KEY: ${KBOT_S3_SECRET_KEY:-kbot123456}
+      KBOT_AUDIT_ARCHIVE_AFTER_MONTHS: ${KBOT_AUDIT_ARCHIVE_AFTER_MONTHS:-13}
+      # KB 向量化:必须与 app 一致(同一向量空间),否则 worker 写入的向量与 server 查询不可比。
+      KBOT_EMBEDDER: ${KBOT_EMBEDDER:-local}
+      KBOT_EMBEDDER_DIM: ${KBOT_EMBEDDER_DIM:-1536}
+      KBOT_EMBEDDER_MODEL: ${KBOT_EMBEDDER_MODEL:-text-embedding-3-small}
+      KBOT_TOOL_ALLOWED_HOSTS: ${KBOT_TOOL_ALLOWED_HOSTS:-crossborder-sim,insurance-sim}
+      KBOT_TOOL_ALLOW_PRIVATE_NETWORK: ${KBOT_TOOL_ALLOW_PRIVATE_NETWORK:-false}
+      KBOT_KB_MARKDOWN_ALLOWED_ROOTS: ${KBOT_KB_MARKDOWN_ALLOWED_ROOTS:-/scenarios}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      sandbox-runner:
+        condition: service_healthy
+
+  db:
+    image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+    environment:
+      POSTGRES_USER: kbot
+      POSTGRES_PASSWORD: kbot
+      POSTGRES_DB: kbot
+    ports:
+      - "${KBOT_POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kbot"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - kbot_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    ports:
+      - "${KBOT_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - kbot_redisdata:/data
+
+  # MinIO对象存储（大附件、审计冷存）
+  minio:
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    ports:
+      - "${KBOT_MINIO_PORT:-9000}:9000"
+      - "${KBOT_MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${KBOT_S3_ACCESS_KEY:-kbot}
+      MINIO_ROOT_PASSWORD: ${KBOT_S3_SECRET_KEY:-kbot123456}
+    command: server /data --console-address ":9001"
+    volumes:
+      - kbot_miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 本地 Ollama：数据分级路由的本地 Provider，使用 --profile local-llm 启动。
+  ollama:
+    profiles: ["local-llm"]
+    image: ollama/ollama:latest@sha256:1685741456770df6e3cceb2a945a5f75e020f658d1701509668d6f4688f1dd3f
+    ports:
+      - "${KBOT_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - kbot_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      retries: 6
+
+  # ollama-init：一次性拉模型，之后复用 volume 缓存。国内加速见 docs/runbook.md。
+  ollama-init:
+    profiles: ["local-llm"]
+    image: ollama/ollama:latest@sha256:1685741456770df6e3cceb2a945a5f75e020f658d1701509668d6f4688f1dd3f
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama"]
+    command: ["pull", "${KBOT_OLLAMA_MODEL:-qwen2.5:7b}"]
+    restart: "no"
+
+volumes:
+  kbot_pgdata:
+  kbot_redisdata:
+  kbot_miniodata:
+  kbot_ollama:

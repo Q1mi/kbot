@@ -1,0 +1,49 @@
+[
+  {
+    "name": "get_order",
+    "description": "查询跨境电商订单",
+    "sensitive": false,
+    "schema_json": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string"}
+      },
+      "required": ["order_id"]
+    }
+  },
+  {
+    "name": "get_inventory",
+    "description": "查询 SKU 多仓库存",
+    "sensitive": false,
+    "schema_json": {
+      "type": "object",
+      "properties": {
+        "sku": {"type": "string"}
+      },
+      "required": ["sku"]
+    }
+  },
+  {
+    "name": "create_inventory_transfer",
+    "description": "创建跨仓库存调拨",
+    "sensitive": true,
+    "schema_json": {
+      "type": "object",
+      "properties": {
+        "sku": {"type": "string"},
+        "from_warehouse": {"type": "string"},
+        "to_warehouse": {"type": "string"},
+        "quantity": {"type": "integer", "minimum": 1},
+        "idempotency_key": {"type": "string"},
+        "dry_run": {"type": "boolean"}
+      },
+      "required": ["sku", "from_warehouse", "to_warehouse", "quantity", "idempotency_key"]
+      ,
+      "x-kbot-approval": {
+        "title": "库存调拨审批",
+        "summary_fields": ["sku", "from_warehouse", "to_warehouse", "quantity"],
+        "confirm_label": "批准并执行"
+      }
+    }
+  }
+]

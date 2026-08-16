@@ -1,0 +1,40 @@
+{
+  "name": "kbot-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "kbot 企业级 AI Agent 教学平台 · Admin Console",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+	"typecheck": "tsc --noEmit",
+	"test": "vitest run"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.5.2",
+    "@monaco-editor/react": "^4.7.0",
+    "@tanstack/react-query": "^5.59.0",
+    "antd": "^5.21.0",
+    "axios": "^1.18.1",
+    "react": "^18.3.1",
+    "react-diff-viewer-continued": "^3.4.0",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1",
+    "wouter": "^3.10.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.42",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "typescript": "^5.6.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "dompurify": "3.4.13"
+  }
+}

@@ -1,0 +1,57 @@
+name: delivery-ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  course:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kbot-course
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: kbot-course/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kbot-course/web/admin/package-lock.json
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: make -C projects/crossborder test
+      - run: make -C projects/insurance test
+      - run: npm ci && npm run build
+        working-directory: kbot-course/web/admin
+      - run: docker compose --env-file .env.example -f deploy/compose.yaml config --quiet
+
+  final:
+    if: github.ref_name == 'master' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kbot-final
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: kbot-final/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kbot-final/web/admin/package-lock.json
+      - run: make build
+      - run: make test
+      - run: npm ci && npm audit --audit-level=moderate && npm run build
+        working-directory: kbot-final/web/admin
+      - run: docker compose -f deploy/docker-compose.yml --env-file .env.example config --quiet

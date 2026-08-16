@@ -1,0 +1,244 @@
+# kbot 课堂可观测扩展。
+# 用法：docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.langfuse.yml up -d --build
+# Langfuse 与 kbot 使用独立数据服务，便于课程复位和版本升级演示。
+
+x-langfuse-worker-env: &langfuse-worker-env
+  NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
+  DATABASE_URL: postgresql://langfuse:langfuse-course-db@langfuse-postgres:5432/langfuse
+  SALT: kbot-course-langfuse-salt-2026
+  ENCRYPTION_KEY: 8a2fefdd385a0a18f87aa85705070ad80c0b5e188247f6e8cfdbd9f1a784fa42
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: langfuse-course-clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse-course-minio
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse-course-minio
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${LANGFUSE_MINIO_PORT:-9090}
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: langfuse-course-redis
+  REDIS_TLS_ENABLED: "false"
+
+services:
+  app:
+    environment:
+      KBOT_LLM_BASE_URL: http://mock-llm:8090/v1
+      KBOT_LLM_API_KEY: classroom-demo-key
+      KBOT_LLM_MODEL: kbot-classroom-mock
+      KBOT_LLM_CHEAP_MODEL: kbot-classroom-mock
+      KBOT_OLLAMA_BASE_URL: ""
+      KBOT_JWT_SECRET_KEY: kbot-course-jwt-secret-key-2026-at-least-32-chars
+      KBOT_CREDENTIAL_ENCRYPTION_KEY: kbot-course-credential-key-2026-at-least-32-chars
+      KBOT_AUTOSEED_ADMIN: "true"
+      KBOT_AUTOSEED_ADMIN_EMAIL: teacher@kbot.local
+      KBOT_AUTOSEED_ADMIN_PASSWORD: admin12345
+      KBOT_AUTOSEED_COURSE_ASSETS: "true"
+      KBOT_OTLP_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
+      KBOT_OTLP_HEADERS: Authorization=Basic bGZfcGtfa2JvdF9jb3Vyc2VfZGVtbzpsZl9za19rYm90X2NvdXJzZV9kZW1v,x-langfuse-ingestion-version=4
+      KBOT_OTEL_SAMPLE_RATIO: "1"
+      KBOT_OTEL_CAPTURE_CONTENT: "true"
+      KBOT_SERVICE_VERSION: course-demo
+      KBOT_LANGFUSE_UI_URL: http://localhost:${LANGFUSE_PORT:-3000}
+      KBOT_LANGFUSE_PROJECT_ID: kbot-demo
+      KBOT_TOOL_ALLOWED_HOSTS: mock-llm,crossborder-sim,insurance-sim
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+      crossborder-sim:
+        condition: service_healthy
+      insurance-sim:
+        condition: service_healthy
+      langfuse-web:
+        condition: service_started
+
+  worker:
+    environment:
+      KBOT_LLM_BASE_URL: http://mock-llm:8090/v1
+      KBOT_LLM_API_KEY: classroom-demo-key
+      KBOT_LLM_MODEL: kbot-classroom-mock
+      KBOT_LLM_CHEAP_MODEL: kbot-classroom-mock
+      KBOT_OLLAMA_BASE_URL: ""
+      KBOT_JWT_SECRET_KEY: kbot-course-jwt-secret-key-2026-at-least-32-chars
+      KBOT_CREDENTIAL_ENCRYPTION_KEY: kbot-course-credential-key-2026-at-least-32-chars
+      KBOT_OTLP_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
+      KBOT_OTLP_HEADERS: Authorization=Basic bGZfcGtfa2JvdF9jb3Vyc2VfZGVtbzpsZl9za19rYm90X2NvdXJzZV9kZW1v,x-langfuse-ingestion-version=4
+      KBOT_OTEL_SAMPLE_RATIO: "1"
+      KBOT_OTEL_CAPTURE_CONTENT: "true"
+      KBOT_SERVICE_VERSION: course-demo
+      KBOT_TOOL_ALLOWED_HOSTS: mock-llm,crossborder-sim,insurance-sim
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+      crossborder-sim:
+        condition: service_healthy
+      insurance-sim:
+        condition: service_healthy
+      langfuse-web:
+        condition: service_started
+
+  # Langfuse 课堂使用 Mock LLM，Ollama 留给数据分级章节按 profile 启动。
+  ollama:
+    profiles: ["local-llm"]
+
+  ollama-init:
+    profiles: ["local-llm"]
+
+  mock-llm:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.mockllm
+    ports:
+      - "${KBOT_MOCK_LLM_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "/kbot-mockllm", "healthcheck"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  crossborder-sim:
+    build:
+      context: ../projects/crossborder
+      dockerfile: Dockerfile
+    ports:
+      - "${CROSSBORDER_PORT:-8091}:8091"
+    environment:
+      CROSSBORDER_ADDR: ":8091"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8091/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  insurance-sim:
+    build:
+      context: ../projects/insurance
+      dockerfile: Dockerfile
+    ports:
+      - "${INSURANCE_PORT:-8092}:8092"
+    environment:
+      INSURANCE_ADDR: ":8092"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8092/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3.175.0@sha256:cf7ac3d5d29bce3d2f4626d5b3231665c5585a81599b5f54fd8e30f648874403
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment: *langfuse-worker-env
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3.175.0@sha256:45c0fb329106da48ebffcfc17a5a7f585bb5bfb94c44125add7bdd19a440ed9b
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: kbot-course-nextauth-secret-at-least-32-chars
+      LANGFUSE_INIT_ORG_ID: kbot-course
+      LANGFUSE_INIT_ORG_NAME: kbot Course
+      LANGFUSE_INIT_PROJECT_ID: kbot-demo
+      LANGFUSE_INIT_PROJECT_NAME: kbot Agent Demo
+      LANGFUSE_INIT_PROJECT_RETENTION: "30"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf_pk_kbot_course_demo
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf_sk_kbot_course_demo
+      LANGFUSE_INIT_USER_EMAIL: admin@kbot.local
+      LANGFUSE_INIT_USER_NAME: kbot Teacher
+      LANGFUSE_INIT_USER_PASSWORD: admin12345
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: langfuse-course-clickhouse
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio:latest@sha256:f03dcef49bcc11daa8fc0fd4e31a898bd8ab9fa2294a51be3b135967127b3d58
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: langfuse-course-minio
+    ports:
+      - "${LANGFUSE_MINIO_PORT:-9090}:9000"
+      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_PORT:-9091}:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  langfuse-redis:
+    image: docker.io/redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    restart: unless-stopped
+    command: --requirepass langfuse-course-redis --maxmemory-policy noeviction
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "langfuse-course-redis", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  langfuse-postgres:
+    image: docker.io/postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse-course-db
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:

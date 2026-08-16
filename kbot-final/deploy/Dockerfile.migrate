@@ -1,0 +1,16 @@
+# 多阶段构建:只编 cmd/migrate,运行阶段带上 migrations/ 目录。
+# migrate 服务在 db healthy 后跑一次 -up,app/worker 依赖其 completed_successfully。
+FROM golang:1.26.5@sha256:7caba5286b4c3613a337b709c573047d8ae62ee76106647313b61e72b99f20af AS build
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /bin/kbot-migrate ./cmd/migrate
+
+# 运行阶段:distroless static。migrate 二进制以 file://migrations 读取 SQL。
+FROM gcr.io/distroless/static-debian12@sha256:6447365a6337c3732f412d1b74357b30a633831955b2bc45552b0086be907687
+WORKDIR /app
+COPY --from=build /bin/kbot-migrate /kbot-migrate
+COPY migrations /app/migrations
+ENTRYPOINT ["/kbot-migrate"]
+CMD ["-up"]

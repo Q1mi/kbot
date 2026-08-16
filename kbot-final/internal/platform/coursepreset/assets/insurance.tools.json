@@ -1,0 +1,115 @@
+[
+  {
+    "name": "get_policy",
+    "source_type": "rest_api",
+    "description": "按保单号查询保单状态、产品版本、保险期间、责任限额与免赔额",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_policy",
+    "schema_json": {"type": "object", "additionalProperties": false, "required": ["policy_id"], "properties": {"policy_id": {"type": "string", "minLength": 1, "description": "车险保单号"}}},
+    "test_input": {"policy_id": "POL-CAR-2026-0001"}
+  },
+  {
+    "name": "get_claim",
+    "source_type": "rest_api",
+    "description": "按案件号查询事故、报案、索赔金额、材料清单和理赔状态",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_claim",
+    "schema_json": {"type": "object", "additionalProperties": false, "required": ["claim_id"], "properties": {"claim_id": {"type": "string", "minLength": 1, "description": "理赔案件号"}}},
+    "test_input": {"claim_id": "CLM-2026-0001"}
+  },
+  {
+    "name": "evaluate_coverage",
+    "source_type": "rest_api",
+    "description": "调用确定性责任规则核验保险期间、责任范围、免赔额和最高可赔金额",
+    "sensitive": false,
+    "endpoint_path": "/tools/evaluate_coverage",
+    "schema_json": {"type": "object", "additionalProperties": false, "required": ["claim_id"], "properties": {"claim_id": {"type": "string", "minLength": 1, "description": "理赔案件号"}}},
+    "test_input": {"claim_id": "CLM-2026-0001"}
+  },
+  {
+    "name": "get_fraud_features",
+    "source_type": "rest_api",
+    "description": "查询理赔风险分、命中信号和反欺诈规则集版本，供分流与调查使用",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_fraud_features",
+    "schema_json": {"type": "object", "additionalProperties": false, "required": ["claim_id"], "properties": {"claim_id": {"type": "string", "minLength": 1, "description": "理赔案件号"}}},
+    "test_input": {"claim_id": "CLM-2026-0002"}
+  },
+  {
+    "name": "request_additional_documents",
+    "source_type": "rest_api",
+    "description": "针对材料缺口发起补充材料请求；涉及客户触达，需要人工审批",
+    "sensitive": true,
+    "endpoint_path": "/tools/request_additional_documents",
+    "schema_json": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claim_id", "documents", "idempotency_key"],
+      "properties": {
+        "claim_id": {"type": "string", "minLength": 1, "description": "理赔案件号"},
+        "documents": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "description": "需补充的材料代码"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不触达客户"}
+      },
+      "x-kbot-approval": {"title": "理赔补充材料审批", "operation_label": "发起补充材料请求", "risk_label": "客户触达", "field_order": ["claim_id", "documents"], "field_labels": {"claim_id": "理赔案件号", "documents": "补充材料", "idempotency_key": "幂等键"}}
+    },
+    "test_input": {"claim_id": "CLM-2026-0001", "documents": ["repair_invoice"], "idempotency_key": "course-preflight-documents", "dry_run": true}
+  },
+  {
+    "name": "approve_claim",
+    "source_type": "rest_api",
+    "description": "在责任、材料和风险规则通过后批准赔付金额；属于敏感资金操作",
+    "sensitive": true,
+    "endpoint_path": "/tools/approve_claim",
+    "schema_json": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claim_id", "approved_amount", "reason_codes", "idempotency_key"],
+      "properties": {
+        "claim_id": {"type": "string", "minLength": 1, "description": "理赔案件号"},
+        "approved_amount": {"type": "number", "exclusiveMinimum": 0, "description": "批准金额，不得超过确定性规则给出的最高可赔金额"},
+        "reason_codes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "description": "责任与金额决定理由码"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不产生赔付"}
+      },
+      "x-kbot-approval": {"title": "理赔决定审批", "operation_label": "批准理赔赔付", "risk_label": "资金操作", "field_order": ["claim_id", "approved_amount", "reason_codes"], "field_labels": {"claim_id": "理赔案件号", "approved_amount": "批准金额", "reason_codes": "决定理由码", "idempotency_key": "幂等键"}, "currency_fields": {"approved_amount": "¥"}}
+    },
+    "test_input": {"claim_id": "CLM-2026-0001", "approved_amount": 6300, "reason_codes": ["COVERED_COLLISION", "DEDUCTIBLE_APPLIED"], "idempotency_key": "course-preflight-claim", "dry_run": true}
+  },
+  {
+    "name": "hold_claim_payment",
+    "source_type": "rest_api",
+    "description": "对风险分达到阈值的理赔案件冻结支付；需要人工审批并保留风险证据",
+    "sensitive": true,
+    "endpoint_path": "/tools/hold_claim_payment",
+    "schema_json": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claim_id", "reason", "idempotency_key"],
+      "properties": {
+        "claim_id": {"type": "string", "minLength": 1, "description": "高风险理赔案件号"},
+        "reason": {"type": "string", "minLength": 8, "description": "包含风险分、规则版本与信号的冻结原因"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不改变支付状态"}
+      },
+      "x-kbot-approval": {"title": "欺诈风险冻结审批", "operation_label": "冻结理赔支付", "risk_label": "高风险案件", "field_order": ["claim_id", "reason"], "field_labels": {"claim_id": "理赔案件号", "reason": "冻结原因", "idempotency_key": "幂等键"}}
+    },
+    "test_input": {"claim_id": "CLM-2026-0002", "reason": "课程发布前工具试调，risk_score 达到高风险阈值", "idempotency_key": "course-preflight-hold", "dry_run": true}
+  },
+  {
+    "name": "open_fraud_investigation",
+    "source_type": "rest_api",
+    "description": "为已冻结的高风险理赔案件创建欺诈调查任务；需要人工审批",
+    "sensitive": true,
+    "endpoint_path": "/tools/open_fraud_investigation",
+    "schema_json": {
+      "type": "object", "additionalProperties": false,
+      "required": ["claim_id", "reason", "idempotency_key"],
+      "properties": {
+        "claim_id": {"type": "string", "minLength": 1, "description": "已冻结的高风险理赔案件号"},
+        "reason": {"type": "string", "minLength": 8, "description": "调查范围、风险信号与证据缺口"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不创建调查任务"}
+      },
+      "x-kbot-approval": {"title": "欺诈调查立案审批", "operation_label": "创建欺诈调查案件", "risk_label": "高风险案件", "field_order": ["claim_id", "reason"], "field_labels": {"claim_id": "理赔案件号", "reason": "立案原因", "idempotency_key": "幂等键"}}
+    },
+    "test_input": {"claim_id": "CLM-2026-0002", "reason": "课程发布前工具试调，核验欺诈调查立案端点", "idempotency_key": "course-preflight-investigation", "dry_run": true}
+  }
+]

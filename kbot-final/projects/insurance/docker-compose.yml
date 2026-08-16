@@ -1,0 +1,12 @@
+services:
+  insurance-sim:
+    build: .
+    ports:
+      - "${INSURANCE_PORT:-8092}:8092"
+    environment:
+      INSURANCE_ADDR: ":8092"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8092/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10

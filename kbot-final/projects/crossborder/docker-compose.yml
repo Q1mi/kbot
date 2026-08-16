@@ -1,0 +1,12 @@
+services:
+  crossborder-sim:
+    build: .
+    ports:
+      - "${CROSSBORDER_PORT:-8091}:8091"
+    environment:
+      CROSSBORDER_ADDR: ":8091"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8091/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10

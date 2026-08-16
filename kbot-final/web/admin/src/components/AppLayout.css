@@ -1,0 +1,167 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-shell.ant-layout {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-sidebar.ant-layout-sider {
+  position: relative;
+  z-index: 20;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  box-shadow: 2px 0 10px rgb(15 23 42 / 10%);
+}
+
+.app-sidebar .ant-layout-sider-children {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-brand {
+  display: flex;
+  height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.app-brand.is-collapsed {
+  font-size: 18px;
+}
+
+.app-navigation.ant-menu {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.app-main-shell.ant-layout {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-header.ant-layout-header {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  height: 64px;
+  min-width: 0;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 5%);
+}
+
+.app-sidebar-toggle {
+  flex: 0 0 auto;
+}
+
+.app-header-actions,
+.app-user-menu {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.app-header-actions {
+  gap: 16px;
+}
+
+.app-user-menu {
+  cursor: pointer;
+}
+
+.app-user-name {
+  max-width: 180px;
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-content.ant-layout-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 16px;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.app-breadcrumb {
+  margin-bottom: 12px;
+}
+
+.app-content.is-conversation-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content.is-conversation-page .app-breadcrumb {
+  flex: 0 0 auto;
+}
+
+.app-page-surface {
+  min-width: 0;
+  min-height: 360px;
+  padding: 24px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.app-page-surface.is-conversation-page {
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+@media (max-width: 768px) {
+  .app-header.ant-layout-header {
+    padding: 0 10px;
+  }
+
+  .app-header-actions {
+    gap: 8px;
+  }
+
+  .app-user-name {
+    display: none;
+  }
+
+  .app-content.ant-layout-content {
+    padding: 12px;
+  }
+
+  .app-page-surface {
+    padding: 16px;
+  }
+}

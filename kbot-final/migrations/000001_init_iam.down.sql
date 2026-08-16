@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS role_permissions;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS workspace_members;
+DROP TABLE IF EXISTS workspaces;
+DROP TABLE IF EXISTS users;

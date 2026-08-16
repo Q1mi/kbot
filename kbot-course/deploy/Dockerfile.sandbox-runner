@@ -1,0 +1,11 @@
+FROM golang:1.26.5 AS build
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /bin/kbot-sandbox-runner ./cmd/sandbox-runner
+
+FROM docker:27-cli
+COPY --from=build /bin/kbot-sandbox-runner /usr/local/bin/kbot-sandbox-runner
+EXPOSE 8081
+ENTRYPOINT ["/usr/local/bin/kbot-sandbox-runner"]

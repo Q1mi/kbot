@@ -1,0 +1,1220 @@
+basePath: /api/v1
+definitions:
+  agent.AgentVersionConfig:
+    properties:
+      allow_network:
+        type: boolean
+      kb_ids:
+        items:
+          type: string
+        type: array
+      max_steps:
+        type: integer
+      prompt_env:
+        type: string
+      skill_version_ids:
+        items:
+          type: string
+        type: array
+      system_prompt:
+        type: string
+      system_prompt_id:
+        type: string
+      system_prompt_version_id:
+        type: string
+      tool_ids:
+        items:
+          type: string
+        type: array
+      user_prompt_id:
+        type: string
+    type: object
+  agent.AgentVersionView:
+    properties:
+      agent_id:
+        type: string
+      config:
+        $ref: '#/definitions/agent.AgentVersionConfig'
+      created_at:
+        type: string
+      created_by:
+        type: string
+      environments:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      version:
+        type: integer
+    type: object
+  agent.CreateAgentRequest:
+    properties:
+      allow_network:
+        type: boolean
+      created_by:
+        type: string
+      kb_ids:
+        items:
+          type: string
+        type: array
+      max_steps:
+        type: integer
+      name:
+        type: string
+      prompt_env:
+        type: string
+      skill_version_ids:
+        items:
+          type: string
+        type: array
+      system_prompt:
+        description: 字面量
+        type: string
+      system_prompt_id:
+        description: 推荐：绑定 Prompt，创建会话时解析灰度
+        type: string
+      system_prompt_version_id:
+        description: 或绑定 Prompt 中心版本
+        type: string
+      template:
+        type: string
+      tool_ids:
+        items:
+          type: string
+        type: array
+      user_prompt_id:
+        description: 可选：首轮任务输入模板
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  agent.UserPromptInputSpec:
+    properties:
+      enabled:
+        type: boolean
+      prompt_env:
+        type: string
+      prompt_id:
+        type: string
+      prompt_name:
+        type: string
+      prompt_version:
+        type: integer
+      prompt_version_id:
+        type: string
+      variables_schema:
+        type: string
+    type: object
+  domain.GenerationConfig:
+    properties:
+      max_output_tokens:
+        type: integer
+      seed:
+        type: integer
+      stop:
+        items:
+          type: string
+        type: array
+      temperature:
+        type: number
+      top_p:
+        type: number
+    type: object
+  domain.TeamMember:
+    properties:
+      agent_id:
+        type: string
+      agent_version_id:
+        description: pin 死的成员 agent 版本(建团队时解析,老团队不随成员 agent 发新版而变)
+        type: string
+      role:
+        type: string
+    type: object
+  domain.User:
+    properties:
+      created_at:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      status:
+        description: active / inactive / suspended
+        type: string
+      updated_at:
+        type: string
+    type: object
+  iam.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  iam.LoginResponse:
+    properties:
+      expires_at:
+        type: string
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/domain.User'
+    type: object
+  kb.CreateKBRequest:
+    properties:
+      created_by:
+        type: string
+      embedding_model:
+        type: string
+      name:
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  prompt.CreatePromptRequest:
+    properties:
+      category:
+        type: string
+      created_by:
+        type: string
+      generation_config:
+        $ref: '#/definitions/domain.GenerationConfig'
+      model_profile_version_id:
+        type: string
+      name:
+        type: string
+      template:
+        type: string
+      variables_schema:
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  skill.CreateSkillRequest:
+    properties:
+      category:
+        type: string
+      created_by:
+        type: string
+      skill_md:
+        description: 完整 SKILL.md 文本
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  team.CreateTeamRequest:
+    properties:
+      members:
+        items:
+          $ref: '#/definitions/domain.TeamMember'
+        type: array
+      mode:
+        description: supervisor / pipeline
+        type: string
+      name:
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  tool.CreateToolRequest:
+    properties:
+      auth_config:
+        type: string
+      created_by:
+        type: string
+      description:
+        type: string
+      endpoint_config:
+        type: string
+      name:
+        type: string
+      schema_json:
+        type: string
+      sensitive:
+        description: 敏感工具调用前需审批
+        type: boolean
+      source_type:
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  tool.CreateToolVersionRequest:
+    properties:
+      auth_config:
+        type: string
+      created_by:
+        type: string
+      endpoint_config:
+        type: string
+      retry_policy:
+        type: string
+      schema_json:
+        type: string
+    type: object
+  v1.ChatRequest:
+    properties:
+      agent_env:
+        type: string
+      conversation_id:
+        type: string
+      message:
+        type: string
+      user_prompt_variables:
+        additionalProperties: {}
+        type: object
+      user_prompt_version_id:
+        type: string
+    type: object
+  v1.CreateSkillVersionRequest:
+    properties:
+      skill_md:
+        type: string
+    type: object
+  v1.CreateUserRequest:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      password:
+        type: string
+    type: object
+  v1.CreateWorkspaceRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      parent_id:
+        type: string
+    type: object
+  v1.PromoteAgentVersionRequest:
+    properties:
+      env:
+        type: string
+      version_id:
+        type: string
+    type: object
+  v1.SearchRequest:
+    properties:
+      mode:
+        type: string
+      query:
+        type: string
+      top_k:
+        type: integer
+    type: object
+info:
+  contact: {}
+  description: kbot 企业级 AI Agent 教学平台 REST API，由 swaggo/swag 从 handler 注解生成。
+  title: kbot API
+  version: "1.0"
+paths:
+  /agents:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Agents
+      tags:
+      - agents
+    post:
+      parameters:
+      - description: Agent 定义
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/agent.CreateAgentRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Agent
+      tags:
+      - agents
+  /agents/{agent_id}:
+    get:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Agent 详情
+      tags:
+      - agents
+  /agents/{agent_id}/chat:
+    post:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      - description: 消息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.ChatRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 与 Agent 同步对话(聚合流式为整段回答)
+      tags:
+      - agents
+  /agents/{agent_id}/input-schema:
+    get:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      - description: Agent 环境，默认 dev
+        in: query
+        name: agent_env
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agent.UserPromptInputSpec'
+      security:
+      - BearerAuth: []
+      summary: 获取 Agent 首轮 User Prompt Template 输入规范
+      tags:
+      - agents
+  /agents/{agent_id}/promote:
+    post:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      - description: 环境晋升
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.PromoteAgentVersionRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 晋升 Agent 版本到指定环境
+      tags:
+      - agents
+  /agents/{agent_id}/versions:
+    get:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/agent.AgentVersionView'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Agent 不可变版本
+      tags:
+      - agents
+    post:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      - description: 版本配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/agent.AgentVersionConfig'
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/agent.AgentVersionView'
+      security:
+      - BearerAuth: []
+      summary: 创建 Agent 不可变版本
+      tags:
+      - agents
+  /approvals:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 待审批队列
+      tags:
+      - approvals
+  /approvals/{approval_id}/approve:
+    post:
+      parameters:
+      - description: 审批 ID
+        in: path
+        name: approval_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 批准审批(触发续跑)
+      tags:
+      - approvals
+  /audit/logs:
+    get:
+      parameters:
+      - description: 会话 ID
+        in: query
+        name: conversation_id
+        type: string
+      - description: 操作者
+        in: query
+        name: actor
+        type: string
+      - description: 条数
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 检索审计日志
+      tags:
+      - audit
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 邮箱 + 密码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/iam.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/iam.LoginResponse'
+        "401":
+          description: 认证失败
+          schema:
+            type: string
+      summary: 用户登录
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 用户信息
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.CreateUserRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 注册用户
+      tags:
+      - auth
+  /conversations:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出当前用户会话历史
+      tags:
+      - conversations
+  /conversations/{conversation_id}:
+    get:
+      parameters:
+      - description: 会话 ID
+        in: path
+        name: conversation_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 会话详情 + 历史消息
+      tags:
+      - conversations
+  /conversations/{conversation_id}/a2ui/actions:
+    post:
+      responses: {}
+      security:
+      - BearerAuth: []
+      summary: 处理 A2UI 审批动作
+      tags:
+      - conversations
+  /eval/datasets:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出评估集
+      tags:
+      - eval
+  /eval/datasets/{dataset_id}/cases:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Eval 用例
+      tags:
+      - eval
+  /eval/datasets/{dataset_id}/runs:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Eval 运行历史
+      tags:
+      - eval
+  /eval/runs:
+    post:
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "422":
+          description: 通过率低于阈值
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 跑评估门禁(未达阈值返回 422)
+      tags:
+      - eval
+  /guard/injection-logs:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Guard 注入/拦截日志
+      tags:
+      - guard
+  /guard/quotas:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Guard 配额
+      tags:
+      - guard
+  /guard/quotas/{metric}:
+    put:
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 设置 Guard 配额
+      tags:
+      - guard
+  /guard/rules:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Guard 规则
+      tags:
+      - guard
+    post:
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Guard 规则
+      tags:
+      - guard
+  /guard/rules/{rule_id}:
+    put:
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 更新 Guard 规则
+      tags:
+      - guard
+  /integrations/lark/events:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 飞书事件订阅与 URL 校验
+      tags:
+      - integrations
+  /kbs:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出知识库
+      tags:
+      - kbs
+    post:
+      parameters:
+      - description: 知识库
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/kb.CreateKBRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建知识库
+      tags:
+      - kbs
+  /kbs/{kb_id}/search:
+    post:
+      parameters:
+      - description: KB ID
+        in: path
+        name: kb_id
+        required: true
+        type: string
+      - description: 查询 + 模式 + top_k
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.SearchRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: KB 检索(bm25/vector/hybrid)
+      tags:
+      - kbs
+  /prompts:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Prompt
+      tags:
+      - prompts
+    post:
+      parameters:
+      - description: Prompt
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/prompt.CreatePromptRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Prompt(含 v1)
+      tags:
+      - prompts
+  /prompts/{prompt_id}/promote:
+    post:
+      parameters:
+      - description: Prompt ID
+        in: path
+        name: prompt_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 晋升 Prompt 版本到某环境
+      tags:
+      - prompts
+  /skills:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出技能
+      tags:
+      - skills
+    post:
+      parameters:
+      - description: SKILL.md
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/skill.CreateSkillRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 从 SKILL.md 创建技能
+      tags:
+      - skills
+  /skills/{skill_id}/versions:
+    get:
+      parameters:
+      - description: Skill ID
+        in: path
+        name: skill_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Skill 不可变版本
+      tags:
+      - skills
+    post:
+      parameters:
+      - description: Skill ID
+        in: path
+        name: skill_id
+        required: true
+        type: string
+      - description: SKILL.md
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.CreateSkillVersionRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Skill 不可变版本
+      tags:
+      - skills
+  /teams:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出团队
+      tags:
+      - teams
+    post:
+      parameters:
+      - description: 团队 + 成员
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/team.CreateTeamRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建团队(建 v1 + 绑 dev)
+      tags:
+      - teams
+  /teams/{team_id}/promote:
+    post:
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 提升 Team 版本
+      tags:
+      - teams
+  /teams/{team_id}/versions:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Team 版本
+      tags:
+      - teams
+    post:
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Team 版本
+      tags:
+      - teams
+  /tools:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出工具
+      tags:
+      - tools
+    post:
+      parameters:
+      - description: 工具定义
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/tool.CreateToolRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 注册工具
+      tags:
+      - tools
+  /tools/{tool_id}/versions:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出 Tool 不可变版本
+      tags:
+      - tools
+    post:
+      parameters:
+      - description: 版本配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/tool.CreateToolVersionRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Tool 草稿版本
+      tags:
+      - tools
+  /tools/{tool_id}/versions/{version_id}/publish:
+    post:
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 发布指定 Tool 版本
+      tags:
+      - tools
+  /users:
+    get:
+      parameters:
+      - description: 条数(默认 50)
+        in: query
+        name: limit
+        type: integer
+      - description: 偏移
+        in: query
+        name: offset
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出用户
+      tags:
+      - iam
+  /workspaces:
+    get:
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: 列出工作空间
+      tags:
+      - iam
+    post:
+      parameters:
+      - description: 工作空间
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/v1.CreateWorkspaceRequest'
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 新建工作空间
+      tags:
+      - iam
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

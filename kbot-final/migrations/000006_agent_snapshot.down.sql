@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS team_envs;
+DROP TABLE IF EXISTS team_versions;
+DROP TABLE IF EXISTS teams;
+DROP TABLE IF EXISTS agent_endpoints;
+DROP TABLE IF EXISTS agent_envs;
+DROP TABLE IF EXISTS agent_versions;
+DROP TABLE IF EXISTS agents;

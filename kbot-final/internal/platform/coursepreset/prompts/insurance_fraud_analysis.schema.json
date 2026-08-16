@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claim_id", "analysis_goal", "execution_mode", "investigation_scope", "additional_context"],
+  "properties": {
+    "claim_id": {"type": "string", "description": "理赔案件号", "default": "CLM-2026-0002"},
+    "analysis_goal": {"type": "string", "description": "本次风险分析目标", "default": "评估欺诈风险并生成调查处置建议"},
+    "execution_mode": {
+      "type": "string",
+      "enum": ["analyze_only", "prepare_action", "execute_after_approval"],
+      "default": "prepare_action"
+    },
+    "investigation_scope": {"type": "string", "description": "需要重点核验的风险范围", "default": "事故时间、重复图片和关联收款账户"},
+    "additional_context": {"type": "string", "description": "额外背景；无内容时填写 N/A", "default": "达到高风险阈值时准备冻结与调查操作，等待人工审批"}
+  }
+}

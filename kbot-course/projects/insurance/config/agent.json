@@ -1,0 +1,12 @@
+{
+  "name": "insurance-claim-agent",
+  "environment": "dev",
+  "system_prompt": "你是保险理赔助手。严格依据保单、材料和风险工具结果给出可解释结论。任何赔付决定都要保留证据并经过审批。",
+  "max_steps": 8,
+  "tool_version_ids": [
+    "insurance-get-policy-v1",
+    "insurance-fraud-score-v1",
+    "insurance-submit-decision-v1"
+  ],
+  "skill": "config/claim-skill.md"
+}

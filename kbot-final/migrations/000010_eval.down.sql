@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS eval_scores;
+DROP TABLE IF EXISTS eval_runs;
+DROP TABLE IF EXISTS eval_cases;
+DROP TABLE IF EXISTS eval_datasets;
+DROP TABLE IF EXISTS judges;

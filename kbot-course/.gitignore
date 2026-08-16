@@ -1,0 +1,13 @@
+# 本地环境与系统文件
+.DS_Store
+.env
+
+# Go 构建与测试产物
+coverage.out
+bin/
+projects/crossborder/bin/
+projects/insurance/bin/
+
+# Admin Console 依赖与构建产物
+web/admin/node_modules/
+web/admin/dist/

@@ -1,0 +1,66 @@
+[
+  {
+    "id": "insurance-get-policy-v1",
+    "name": "get_policy",
+    "description": "读取保单状态和赔付限额",
+    "source_type": "rest_api",
+    "endpoint": "http://insurance-sim:8092/tools/get-policy",
+    "sensitive": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {"policy_id": {"type": "string", "minLength": 1}},
+      "required": ["policy_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "insurance-fraud-score-v1",
+    "name": "score_claim_fraud",
+    "description": "根据理赔事实计算欺诈风险分",
+    "source_type": "rest_api",
+    "endpoint": "http://insurance-sim:8092/tools/score-claim-fraud",
+    "sensitive": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"}, "policy_id": {"type": "string"},
+        "reason": {"type": "string"}, "amount": {"type": "number", "exclusiveMinimum": 0},
+        "documents": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["id", "policy_id", "amount", "documents"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "insurance-submit-decision-v1",
+    "name": "submit_claim_decision",
+    "description": "提交最终理赔决定；执行前必须经过人工审批",
+    "source_type": "rest_api",
+    "endpoint": "http://insurance-sim:8092/tools/submit-claim-decision",
+    "sensitive": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "claim_id": {"type": "string"},
+        "decision": {
+          "type": "object",
+          "properties": {
+            "eligible": {"type": "boolean"}, "requires_approval": {"type": "boolean"},
+            "risk_score": {"type": "number", "minimum": 0, "maximum": 1},
+            "action": {"type": "string"},
+            "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+          },
+          "required": ["eligible", "requires_approval", "risk_score", "action", "evidence"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["claim_id", "decision"],
+      "additionalProperties": false,
+      "x-kbot-approval": {
+        "title": "理赔决定审批",
+        "summary_fields": ["claim_id", "decision.action", "decision.risk_score"],
+        "confirm_label": "批准并执行"
+      }
+    }
+  }
+]

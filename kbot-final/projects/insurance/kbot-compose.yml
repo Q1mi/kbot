@@ -1,0 +1,43 @@
+services:
+  app:
+    environment:
+      KBOT_LLM_BASE_URL: http://insurance-sim:8092/v1
+      KBOT_LLM_API_KEY: insurance-course-key
+      KBOT_LLM_MODEL: insurance-agent-mock
+      KBOT_LLM_CHEAP_MODEL: insurance-agent-mock
+      KBOT_OLLAMA_BASE_URL: ""
+      KBOT_AUTOSEED_ADMIN: "true"
+      KBOT_AUTOSEED_ADMIN_EMAIL: admin@example.com
+      KBOT_AUTOSEED_ADMIN_PASSWORD: admin12345
+    volumes:
+      - ${PWD}/projects/insurance/knowledge:/scenarios/insurance/knowledge:ro
+    depends_on:
+      insurance-sim:
+        condition: service_healthy
+
+  worker:
+    environment:
+      KBOT_LLM_BASE_URL: http://insurance-sim:8092/v1
+      KBOT_LLM_API_KEY: insurance-course-key
+      KBOT_LLM_MODEL: insurance-agent-mock
+      KBOT_LLM_CHEAP_MODEL: insurance-agent-mock
+      KBOT_OLLAMA_BASE_URL: ""
+    volumes:
+      - ${PWD}/projects/insurance/knowledge:/scenarios/insurance/knowledge:ro
+    depends_on:
+      insurance-sim:
+        condition: service_healthy
+
+  insurance-sim:
+    build:
+      context: ../projects/insurance
+      dockerfile: Dockerfile
+    ports:
+      - "${INSURANCE_PORT:-8092}:8092"
+    environment:
+      INSURANCE_ADDR: ":8092"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8092/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 10

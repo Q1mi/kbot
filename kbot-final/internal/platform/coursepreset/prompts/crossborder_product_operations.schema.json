@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["market", "order_id", "sku", "objective", "execution_mode", "constraints"],
+  "properties": {
+    "market": {"type": "string", "description": "目标市场，如 US", "default": "US"},
+    "order_id": {"type": "string", "description": "跨境订单号", "default": "TTS-20260801-1001"},
+    "sku": {"type": "string", "description": "重点诊断 SKU", "default": "SKU-BLACK-M-01"},
+    "objective": {"type": "string", "description": "本次运营目标", "default": "诊断该商品关联订单的履约风险并给出运营优先级"},
+    "execution_mode": {
+      "type": "string",
+      "enum": ["analyze_only", "prepare_action", "execute_after_approval"],
+      "default": "analyze_only"
+    },
+    "constraints": {"type": "string", "description": "成本、SLA 或运营限制", "default": "优先保障 SLA，控制额外物流成本"}
+  }
+}

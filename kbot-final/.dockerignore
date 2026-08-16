@@ -1,0 +1,8 @@
+# 构建上下文瘦身:前端依赖与产物在镜像里现 build,不从本机带入。
+web/admin/node_modules
+web/admin/dist
+.env
+.env.*
+**/*.test
+.git
+.DS_Store

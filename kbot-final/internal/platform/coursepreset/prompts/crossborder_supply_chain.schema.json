@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_type", "primary_resource_id", "sku", "objective", "execution_mode", "constraints"],
+  "properties": {
+    "task_type": {
+      "type": "string",
+      "enum": ["order_exception", "inventory_transfer", "shipping_plan", "settlement_reconciliation"],
+      "default": "order_exception"
+    },
+    "primary_resource_id": {"type": "string", "description": "订单号或结算账单号", "default": "TTS-20260801-1001"},
+    "sku": {"type": "string", "description": "关联 SKU；结算任务可填写 N/A", "default": "SKU-BLACK-M-01"},
+    "objective": {"type": "string", "description": "本次协同目标", "default": "生成可执行的跨仓调拨恢复方案"},
+    "execution_mode": {
+      "type": "string",
+      "enum": ["analyze_only", "prepare_action", "execute_after_approval"],
+      "default": "prepare_action"
+    },
+    "constraints": {"type": "string", "description": "成本、时效、仓库或财务限制", "default": "调拨前核验库存和 SLA，写操作等待人工审批"}
+  }
+}

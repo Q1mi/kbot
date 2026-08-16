@@ -1,0 +1,140 @@
+[
+  {
+    "name": "get_order",
+    "source_type": "rest_api",
+    "description": "按订单号查询跨境订单状态、市场、币种、商品明细、履约仓和最晚发货时间",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_order",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_id"],
+      "properties": {"order_id": {"type": "string", "minLength": 1, "description": "跨境订单号"}}
+    },
+    "test_input": {"order_id": "TTS-20260801-1001"}
+  },
+  {
+    "name": "get_inventory",
+    "source_type": "rest_api",
+    "description": "按 SKU 查询所有仓库的可用库存与预留库存，支持调拨可行性判断",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_inventory",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sku"],
+      "properties": {"sku": {"type": "string", "minLength": 1, "description": "商品 SKU"}}
+    },
+    "test_input": {"sku": "SKU-BLACK-M-01"}
+  },
+  {
+    "name": "get_shipping_options",
+    "source_type": "rest_api",
+    "description": "查询订单可用承运商、运输费用、预计时效和 SLA 可行性",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_shipping_options",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_id"],
+      "properties": {"order_id": {"type": "string", "minLength": 1, "description": "跨境订单号"}}
+    },
+    "test_input": {"order_id": "TTS-20260801-1001"}
+  },
+  {
+    "name": "get_statement",
+    "source_type": "rest_api",
+    "description": "查询平台结算账单状态、应结金额、实结金额和原始币种",
+    "sensitive": false,
+    "endpoint_path": "/tools/get_statement",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement_id"],
+      "properties": {"statement_id": {"type": "string", "minLength": 1, "description": "平台结算账单号"}}
+    },
+    "test_input": {"statement_id": "STMT-2026-31"}
+  },
+  {
+    "name": "create_inventory_transfer",
+    "source_type": "rest_api",
+    "description": "在两个仓库之间创建库存调拨；执行前核验源仓可用库存并进入人工审批",
+    "sensitive": true,
+    "endpoint_path": "/tools/create_inventory_transfer",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sku", "from_warehouse", "to_warehouse", "quantity", "idempotency_key"],
+      "properties": {
+        "sku": {"type": "string", "minLength": 1, "description": "调拨商品 SKU"},
+        "from_warehouse": {"type": "string", "minLength": 1, "description": "源仓库 ID"},
+        "to_warehouse": {"type": "string", "minLength": 1, "description": "目标仓库 ID"},
+        "quantity": {"type": "integer", "minimum": 1, "description": "调拨数量"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "同一业务动作重试时保持稳定"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不写入业务状态"}
+      },
+      "x-kbot-approval": {
+        "title": "库存调拨审批",
+        "operation_label": "创建跨仓库存调拨",
+        "risk_label": "影响可售库存",
+        "field_order": ["sku", "from_warehouse", "to_warehouse", "quantity"],
+        "field_labels": {"sku": "SKU", "from_warehouse": "源仓", "to_warehouse": "目标仓", "quantity": "调拨数量", "idempotency_key": "幂等键"}
+      }
+    },
+    "test_input": {"sku": "SKU-BLACK-M-01", "from_warehouse": "WH-US-LAX", "to_warehouse": "WH-CN-SZ", "quantity": 2, "idempotency_key": "course-preflight-transfer", "dry_run": true}
+  },
+  {
+    "name": "approve_refund",
+    "source_type": "rest_api",
+    "description": "批准符合状态与金额约束的跨境订单退款；属于敏感资金操作",
+    "sensitive": true,
+    "endpoint_path": "/tools/approve_refund",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_id", "amount", "reason", "idempotency_key"],
+      "properties": {
+        "order_id": {"type": "string", "minLength": 1, "description": "待退款订单号"},
+        "amount": {"type": "number", "exclusiveMinimum": 0, "description": "退款金额，不得超过订单实付金额"},
+        "reason": {"type": "string", "minLength": 4, "description": "包含事实依据的退款原因"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不写入业务状态"}
+      },
+      "x-kbot-approval": {
+        "title": "跨境订单退款审批",
+        "operation_label": "批准订单退款",
+        "risk_label": "资金操作",
+        "field_order": ["order_id", "amount", "reason"],
+        "field_labels": {"order_id": "订单号", "amount": "退款金额", "reason": "退款原因", "idempotency_key": "幂等键"},
+        "currency_fields": {"amount": "$"}
+      }
+    },
+    "test_input": {"order_id": "TTS-20260801-1001", "amount": 129.99, "reason": "课程发布前工具试调", "idempotency_key": "course-preflight-refund", "dry_run": true}
+  },
+  {
+    "name": "create_reconciliation_case",
+    "source_type": "rest_api",
+    "description": "针对已确认的正向结算差异创建平台申诉单；属于敏感财务操作",
+    "sensitive": true,
+    "endpoint_path": "/tools/create_reconciliation_case",
+    "schema_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement_id", "reason", "idempotency_key"],
+      "properties": {
+        "statement_id": {"type": "string", "minLength": 1, "description": "存在差异的结算账单号"},
+        "reason": {"type": "string", "minLength": 8, "description": "差异金额、费用项和规则依据"},
+        "idempotency_key": {"type": "string", "minLength": 8, "description": "稳定业务幂等键"},
+        "dry_run": {"type": "boolean", "description": "工具试调模式，不写入业务状态"}
+      },
+      "x-kbot-approval": {
+        "title": "结算申诉审批",
+        "operation_label": "提交平台结算申诉",
+        "risk_label": "财务操作",
+        "field_order": ["statement_id", "reason"],
+        "field_labels": {"statement_id": "账单号", "reason": "差异原因", "idempotency_key": "幂等键"}
+      }
+    },
+    "test_input": {"statement_id": "STMT-2026-31", "reason": "课程发布前工具试调，核验结算差异申诉端点", "idempotency_key": "course-preflight-reconciliation", "dry_run": true}
+  }
+]

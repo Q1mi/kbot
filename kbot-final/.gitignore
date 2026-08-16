@@ -1,0 +1,28 @@
+# 本地环境与密钥
+.env
+.env.*
+!.env.example
+*.local
+*.local.md
+
+# 本地开发辅助文件
+.agents/
+.claude/
+docs/drafts/
+/skills/
+
+# 构建产物
+/kbot
+/migrate
+/bin/
+coverage.out
+projects/crossborder/bin/
+projects/insurance/bin/
+*.tsbuildinfo
+
+# Admin Console 前端构建产物
+web/admin/node_modules/
+web/admin/dist/
+
+# 系统文件
+.DS_Store

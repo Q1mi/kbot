@@ -1,0 +1,71 @@
+[
+  {
+    "name": "get_order",
+    "source_type": "rest_api",
+    "description": "查询跨境电商订单、商品明细、履约仓和最晚发货时间",
+    "sensitive": false,
+    "schema_json": {"type":"object","required":["order_id"],"properties":{"order_id":{"type":"string"}}},
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/get_order"}
+  },
+  {
+    "name": "get_inventory",
+    "source_type": "rest_api",
+    "description": "查询 SKU 在各仓库的可用和预留库存",
+    "sensitive": false,
+    "schema_json": {"type":"object","required":["sku"],"properties":{"sku":{"type":"string"}}},
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/get_inventory"}
+  },
+  {
+    "name": "get_shipping_options",
+    "source_type": "rest_api",
+    "description": "查询订单可用承运商、费用、时效与 SLA 可行性",
+    "sensitive": false,
+    "schema_json": {"type":"object","required":["order_id"],"properties":{"order_id":{"type":"string"}}},
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/get_shipping_options"}
+  },
+  {
+    "name": "get_statement",
+    "source_type": "rest_api",
+    "description": "查询平台结算账单及应结、实结差异",
+    "sensitive": false,
+    "schema_json": {"type":"object","required":["statement_id"],"properties":{"statement_id":{"type":"string"}}},
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/get_statement"}
+  },
+  {
+    "name": "create_inventory_transfer",
+    "source_type": "rest_api",
+    "description": "在两个仓库之间创建库存调拨，属于敏感库存操作",
+    "sensitive": true,
+    "schema_json": {
+      "type":"object",
+      "required":["sku","from_warehouse","to_warehouse","quantity","idempotency_key"],
+      "properties":{"sku":{"type":"string"},"from_warehouse":{"type":"string"},"to_warehouse":{"type":"string"},"quantity":{"type":"integer","minimum":1},"idempotency_key":{"type":"string"},"dry_run":{"type":"boolean","description":"仅用于工具试调，不写入业务状态"}},
+      "x-kbot-approval":{"title":"库存调拨审批","operation_label":"创建跨仓库存调拨","risk_label":"影响可售库存","field_order":["sku","from_warehouse","to_warehouse","quantity"],"field_labels":{"sku":"SKU","from_warehouse":"源仓","to_warehouse":"目标仓","quantity":"调拨数量","idempotency_key":"幂等键"}}
+    },
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/create_inventory_transfer"}
+  },
+  {
+    "name": "approve_refund",
+    "source_type": "rest_api",
+    "description": "批准未发货订单退款并取消订单，属于敏感资金操作",
+    "sensitive": true,
+    "schema_json": {
+      "type":"object","required":["order_id","amount","reason","idempotency_key"],
+      "properties":{"order_id":{"type":"string"},"amount":{"type":"number","exclusiveMinimum":0},"reason":{"type":"string"},"idempotency_key":{"type":"string"},"dry_run":{"type":"boolean","description":"仅用于工具试调，不写入业务状态"}},
+      "x-kbot-approval":{"title":"跨境订单退款审批","operation_label":"批准订单退款","risk_label":"资金操作","field_order":["order_id","amount","reason"],"field_labels":{"order_id":"订单号","amount":"退款金额","reason":"退款原因","idempotency_key":"幂等键"},"currency_fields":{"amount":"$"}}
+    },
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/approve_refund"}
+  },
+  {
+    "name": "create_reconciliation_case",
+    "source_type": "rest_api",
+    "description": "针对结算差异创建平台申诉单",
+    "sensitive": true,
+    "schema_json": {
+      "type":"object","required":["statement_id","reason","idempotency_key"],
+      "properties":{"statement_id":{"type":"string"},"reason":{"type":"string"},"idempotency_key":{"type":"string"},"dry_run":{"type":"boolean","description":"仅用于工具试调，不写入业务状态"}},
+      "x-kbot-approval":{"title":"结算申诉审批","operation_label":"提交平台结算申诉","risk_label":"财务操作","field_order":["statement_id","reason"],"field_labels":{"statement_id":"账单号","reason":"差异原因","idempotency_key":"幂等键"}}
+    },
+    "endpoint_config": {"method":"POST","url":"http://crossborder-sim:8091/tools/create_reconciliation_case"}
+  }
+]

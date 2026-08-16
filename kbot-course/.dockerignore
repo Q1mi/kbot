@@ -1,0 +1,7 @@
+.git
+.github
+bin
+coverage.out
+web/admin/node_modules
+web/admin/dist
+projects/*/bin
