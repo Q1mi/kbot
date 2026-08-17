@@ -14,7 +14,7 @@
 | 02 | 跨境业务状态与幂等 | 可重复调用且能检测参数冲突的库存调拨服务 | `projects/crossborder/internal/service` | `make -C projects/crossborder test` |
 | 03 | HTTP Tool 契约 | 将订单、库存和调拨能力暴露为稳定 JSON API | `projects/crossborder/internal/httpapi`、`config/tools.json` | `make -C projects/crossborder test` |
 | 04 | IAM 与 Workspace | JWT、五档角色和 Workspace 请求边界 | `internal/platform/iam`、`internal/api/middleware` | `go test ./internal/config ./internal/platform/iam ./internal/api/...` |
-| 05 | Eino 模型网关 | 可替换的 OpenAI-compatible Gateway 与确定性 Mock LLM | `internal/runtime/llm`、`cmd/mockllm` | `go test ./internal/runtime/llm ./cmd/mockllm` |
+| 05 | Eino 模型网关 | OpenAI-compatible Gateway 直连火山方舟豆包 | `internal/runtime/llm`、`internal/config` | `go test ./internal/runtime/llm`；配置 `ARK_API_KEY` 后执行 `make doubao-check` |
 | 06 | SSE 流式对话 | 增量事件、结束状态和取消传播 | `internal/runtime/engine/chat.go`、`internal/api/sse.go` | `go test ./internal/runtime/engine ./internal/api` |
 | 07 | Tool 版本治理 | Tool Version、试调、发布和固定版本引用 | `internal/platform/tool` | `go test ./internal/platform/tool ./internal/api` |
 | 08 | 安全执行与 Sandbox | REST Executor、SSRF 门禁和独立代码沙箱 | `internal/runtime/tooling`、`internal/runtime/sandbox`、`cmd/sandbox-runner` | `go test ./internal/runtime/tooling ./internal/runtime/sandbox` |

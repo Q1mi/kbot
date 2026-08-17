@@ -4,10 +4,16 @@
 
 - [课程地图](docs/course-map.md)
 
-## 课堂依赖
+## 豆包模型准备
 
-从第 05 课开始可运行 `make mockllm-run` 启动确定性的 OpenAI 兼容课堂模型，
-用它完成网关、流式输出和 Agent 循环演示，无需公网模型密钥。
+从第 05 课开始，课堂运行链路直接连接火山方舟豆包模型。运行前在当前终端配置：
+
+```bash
+export ARK_API_KEY="你的方舟 API Key"
+export KBOT_LLM_MODEL="doubao-seed-2-0-lite-260215"
+```
+
+`KBOT_LLM_BASE_URL` 默认使用 `https://ark.cn-beijing.volces.com/api/v3`。密钥只通过环境变量注入。
 
 从第 08 课开始，代码执行由独立 Sandbox Runner 承担。先设置内部 Token，
 再启动 Runner；API 和 Runner 必须使用同一个值：

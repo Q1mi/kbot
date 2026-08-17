@@ -35,9 +35,9 @@ func Load() Config {
 		HTTPAddr:           valueOrDefault("KBOT_HTTP_ADDR", ":8080"),
 		JWTSecret:          os.Getenv("KBOT_JWT_SECRET"),
 		JWTIssuer:          valueOrDefault("KBOT_JWT_ISSUER", "kbot-course"),
-		LLMBaseURL:         valueOrDefault("KBOT_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
-		LLMAPIKey:          valueOrDefault("KBOT_LLM_API_KEY", "kbot-classroom-key"),
-		LLMModel:           valueOrDefault("KBOT_LLM_MODEL", "kbot-classroom-mock"),
+		LLMBaseURL:         valueOrDefault("KBOT_LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+		LLMAPIKey:          firstNonEmptyEnv("KBOT_LLM_API_KEY", "ARK_API_KEY"),
+		LLMModel:           valueOrDefault("KBOT_LLM_MODEL", "doubao-seed-2-0-lite-260215"),
 		LLMTimeout:         durationOrDefault("KBOT_LLM_TIMEOUT_SECONDS", 30*time.Second),
 		SandboxRunnerURL:   valueOrDefault("KBOT_SANDBOX_RUNNER_URL", "http://127.0.0.1:8081"),
 		SandboxRunnerToken: os.Getenv("KBOT_SANDBOX_RUNNER_TOKEN"),
@@ -67,6 +67,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.LLMBaseURL) == "" || strings.TrimSpace(c.LLMModel) == "" {
 		return fmt.Errorf("LLM base URL and model are required")
 	}
+	if strings.TrimSpace(c.LLMAPIKey) == "" {
+		return fmt.Errorf("KBOT_LLM_API_KEY or ARK_API_KEY is required")
+	}
 	if c.LLMTimeout <= 0 {
 		return fmt.Errorf("LLM timeout must be positive")
 	}
@@ -83,6 +86,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("KBOT_BOOTSTRAP_PASSWORD must contain at least 8 characters when bootstrap is enabled")
 	}
 	return nil
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func valueOrDefault(key, fallback string) string {

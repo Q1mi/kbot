@@ -2,11 +2,11 @@
 
 ```bash
 cp .env.example .env
-# 修改 KBOT_JWT_SECRET、管理员密码和 KBOT_SANDBOX_RUNNER_TOKEN 后启动
+# 修改 KBOT_JWT_SECRET、管理员密码、KBOT_SANDBOX_RUNNER_TOKEN 和 KBOT_LLM_API_KEY 后启动
 docker compose --env-file .env -f deploy/compose.yaml up --build
 ```
 
-浏览器访问 `http://localhost:5173`。Admin Console 通过 Nginx 同源代理访问 API 和 SSE，Compose 会等待 PostgreSQL 迁移、Mock LLM、Sandbox Runner、跨境模拟器、保险模拟器与 API 健康检查通过。
+浏览器访问 `http://localhost:5173`。Admin Console 通过 Nginx 同源代理访问 API 和 SSE，Compose 会等待 PostgreSQL 迁移、Sandbox Runner、跨境模拟器、保险模拟器与 API 健康检查通过；API 通过环境变量连接火山方舟豆包。
 首次登录使用 `.env` 中的 `KBOT_BOOTSTRAP_EMAIL` 与 `KBOT_BOOTSTRAP_PASSWORD`。服务启动时会创建管理员及其默认 Workspace。
 Webhook 或飞书接入默认关闭；启用任一渠道时，需要同时配置对应密钥、`KBOT_CHANNEL_WORKSPACE_ID` 和 `KBOT_CHANNEL_AGENT_ID`。
 

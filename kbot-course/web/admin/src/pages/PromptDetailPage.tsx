@@ -132,7 +132,7 @@ function EditorTab({ promptId, latest, onSaved }: { promptId: string; latest?: P
           showIcon
           style={{ marginBottom: 12 }}
           message="当前版本会使用全局兼容配置"
-          description="make langfuse-up 的全局配置指向课堂 Mock LLM；如需真实模型，请选择 Model Profile Version 后保存为新版本。"
+          description="全局配置默认指向火山方舟豆包；如需切换模型，请选择 Model Profile Version 后保存为新版本。"
         />
       )}
       <Space wrap>

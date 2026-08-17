@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet verify run mockllm-build mockllm-run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test deploy-config
+.PHONY: build test test-race vet verify run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test deploy-config doubao-check
 
 build:
 	@mkdir -p bin
@@ -18,12 +18,9 @@ verify: vet test-race crossborder-test insurance-test admin-build deploy-config
 run:
 	go run ./cmd/server
 
-mockllm-build:
-	@mkdir -p bin
-	go build -o bin/mockllm ./cmd/mockllm
-
-mockllm-run:
-	go run ./cmd/mockllm
+doubao-check:
+	@test -n "$$ARK_API_KEY" || (echo "ARK_API_KEY is required" && exit 1)
+	go test -tags=integration -run TestDoubaoGenerate -v ./internal/runtime/llm
 
 sandbox-runner-build:
 	@mkdir -p bin

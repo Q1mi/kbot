@@ -6,6 +6,7 @@ func TestLoadAndValidate(t *testing.T) {
 	t.Setenv("KBOT_HTTP_ADDR", ":9090")
 	t.Setenv("KBOT_JWT_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("KBOT_JWT_ISSUER", "kbot-test")
+	t.Setenv("ARK_API_KEY", "test-ark-api-key")
 	t.Setenv("KBOT_SANDBOX_RUNNER_TOKEN", "0123456789abcdef0123456789abcdef")
 
 	cfg := Load()

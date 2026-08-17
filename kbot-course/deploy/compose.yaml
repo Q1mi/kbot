@@ -22,17 +22,6 @@ services:
     volumes:
       - ../migrations:/migrations:ro
 
-  mockllm:
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
-    command: ["/app/mockllm"]
-    healthcheck:
-      test: ["CMD", "/app/mockllm", "healthcheck"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   sandbox-runner:
     build:
       context: ..
@@ -98,9 +87,9 @@ services:
       KBOT_HTTP_ADDR: :8080
       KBOT_JWT_SECRET: ${KBOT_JWT_SECRET}
       KBOT_JWT_ISSUER: ${KBOT_JWT_ISSUER:-kbot-course}
-      KBOT_LLM_BASE_URL: http://mockllm:8090/v1
-      KBOT_LLM_API_KEY: ${KBOT_LLM_API_KEY:-kbot-classroom-key}
-      KBOT_LLM_MODEL: ${KBOT_LLM_MODEL:-kbot-classroom-mock}
+      KBOT_LLM_BASE_URL: ${KBOT_LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      KBOT_LLM_API_KEY: ${KBOT_LLM_API_KEY:?set KBOT_LLM_API_KEY}
+      KBOT_LLM_MODEL: ${KBOT_LLM_MODEL:-doubao-seed-2-0-lite-260215}
       KBOT_DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable
       KBOT_BOOTSTRAP_EMAIL: ${KBOT_BOOTSTRAP_EMAIL:?set KBOT_BOOTSTRAP_EMAIL}
       KBOT_BOOTSTRAP_PASSWORD: ${KBOT_BOOTSTRAP_PASSWORD:?set KBOT_BOOTSTRAP_PASSWORD}
@@ -116,8 +105,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      mockllm:
-        condition: service_healthy
       sandbox-runner:
         condition: service_healthy
       crossborder-sim:

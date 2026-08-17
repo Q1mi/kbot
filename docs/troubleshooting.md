@@ -61,7 +61,7 @@ Runner 执行容器需要预拉取固定 digest 的 Python 和 BusyBox 镜像。
 
 ## 真实模型调用失败
 
-依次检查 Base URL、模型名、API Key、网络代理和供应商余额。先使用 Mock LLM 验证 Agent Runtime，再切换真实兼容模型。
+依次检查 Base URL、模型名、API Key、网络代理、方舟账号余额和模型开通状态。先运行 `go test ./internal/runtime/llm` 验证 Gateway，再执行 `make doubao-check` 定位真实网络调用问题。
 
 ## 数据库迁移或测试状态污染
 

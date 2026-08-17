@@ -117,7 +117,7 @@ export function PromptsPage() {
             showIcon
             style={{ marginBottom: 12 }}
             message="Model Profile Version 会固化到 Prompt v1"
-            description="留空时使用全局兼容配置；make langfuse-up 的全局配置指向课堂 Mock LLM。"
+            description="留空时使用全局兼容配置；课堂全局配置默认指向火山方舟豆包。"
           />
           <Form.Item name="model_profile_version_id" label="Model Profile Version">
             <ModelProfileVersionSelect style={{ width: '100%' }} />

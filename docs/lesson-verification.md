@@ -8,7 +8,7 @@
 | 02 | `make -C projects/crossborder test` |
 | 03 | `make -C projects/crossborder test` |
 | 04 | `go test ./internal/config ./internal/platform/iam ./internal/api/...` |
-| 05 | `go test ./internal/runtime/llm ./cmd/mockllm` |
+| 05 | `go test ./internal/runtime/llm`；配置 `ARK_API_KEY` 后执行 `make doubao-check` |
 | 06 | `go test ./internal/runtime/engine ./internal/api` |
 | 07 | `go test ./internal/platform/tool ./internal/api` |
 | 08 | `go test ./internal/runtime/tooling ./internal/runtime/sandbox` |

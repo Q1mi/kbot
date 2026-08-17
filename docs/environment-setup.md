@@ -43,15 +43,17 @@ make bootstrap
 
 ## 模型配置
 
-课程核心测试使用确定性 Mock LLM，无需公网模型 Key。需要演示 DeepSeek、豆包等 OpenAI-compatible 模型时，在本地 `.env` 中配置：
+第 05 课起，课堂运行链路直接连接火山方舟豆包。录制屏幕启动服务前，在屏幕外的终端配置：
 
 ```bash
-KBOT_LLM_BASE_URL=https://api.deepseek.com/v1
-KBOT_LLM_API_KEY=<your-api-key>
-KBOT_LLM_MODEL=deepseek-chat
+export ARK_API_KEY="<your-ark-api-key>"
+export KBOT_LLM_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+export KBOT_LLM_MODEL="doubao-seed-2-0-lite-260215"
 ```
 
-`.env` 已加入忽略规则。不要在终端日志、截图、课程作业或 Git 提交中暴露真实密钥。
+第 05 课完成后可执行 `make doubao-check` 验证真实调用。日常单元测试使用进程内 HTTP Stub，不会访问公网模型或产生 Token 费用。
+
+完整 Compose 环境将同一 API Key 写入本地 `.env` 的 `KBOT_LLM_API_KEY`。`.env` 已加入忽略规则。不要在终端日志、截图、课程作业或 Git 提交中暴露真实密钥。
 
 ## 首次启动检查
 
