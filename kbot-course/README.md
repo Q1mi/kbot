@@ -4,6 +4,17 @@
 
 - [课程地图](docs/course-map.md)
 
+## 豆包模型准备
+
+从第 05 课开始，课堂运行链路直接连接火山方舟豆包模型。运行前在当前终端配置：
+
+```bash
+export ARK_API_KEY="你的方舟 API Key"
+export KBOT_LLM_MODEL="doubao-seed-2-0-lite-260215"
+```
+
+`KBOT_LLM_BASE_URL` 默认使用 `https://ark.cn-beijing.volces.com/api/v3`。密钥只通过环境变量注入。
+
 本仓库保存《Go 企业级 AI Agent 平台实战》的逐课代码。
 
 课程从最小 HTTP 服务开始，每一课使用两个标签：
