@@ -82,7 +82,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
 	}
-	toolExecutor := tooling.NewExecutor(toolRegistry, nil, "crossborder-sim", "localhost", "127.0.0.1").WithSandbox(sandboxClient)
+	toolExecutor := tooling.NewExecutor(toolRegistry, nil, "crossborder-sim", "insurance-sim", "localhost", "127.0.0.1").WithSandbox(sandboxClient)
 	toolExecutor.RegisterSDK("search_knowledge_base", func(ctx context.Context, workspaceID string, arguments map[string]any) (tooling.Result, error) {
 		kbID, _ := arguments["kb_id"].(string)
 		query, _ := arguments["query"].(string)

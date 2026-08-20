@@ -1,4 +1,4 @@
-.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test doubao-check
+.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test doubao-check
 
 build:
 	@mkdir -p bin
@@ -35,3 +35,6 @@ crossborder-build:
 
 crossborder-test:
 	$(MAKE) -C projects/crossborder test
+
+insurance-test:
+	$(MAKE) -C projects/insurance test
