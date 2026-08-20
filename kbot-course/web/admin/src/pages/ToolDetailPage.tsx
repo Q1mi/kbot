@@ -22,6 +22,7 @@ export function ToolDetailPage() {
   const versionsQ = useQuery({ queryKey: ['tool-versions', id], queryFn: () => listToolVersions(id), enabled: !!id })
   const tool = toolsQ.data?.find((t) => t.id === id)
   const latest = versionsQ.data?.[0]
+  const published = versionsQ.data?.find((version) => version.status === 'published')
 
   const test = useMutation({
     mutationFn: async () => {
@@ -99,7 +100,7 @@ export function ToolDetailPage() {
           style={{ marginBottom: 12 }}
           type="info"
           showIcon
-          message="新版本创建后自动成为 Sandbox 的试调目标；发布门禁只认该版本自己的成功试调记录。"
+          message="新版本创建后保持 draft；确认配置后先发布，再通过 Sandbox 调用已发布版本。"
         />
         <Table
           rowKey="id"
@@ -135,7 +136,7 @@ export function ToolDetailPage() {
           style={{ marginBottom: 12 }}
           type="info"
           showIcon
-          message={`填入 JSON 入参后真实调用并落账。当前试调目标：${latest ? `v${latest.version}` : '加载中'}。`}
+          message={`填入 JSON 入参后真实调用 Sandbox Runner。当前试调目标：${published ? `v${published.version}` : '暂无已发布版本'}。`}
         />
         <Typography.Text type="secondary">输入(JSON)</Typography.Text>
         <CodeEditor value={input} onChange={setInput} language="json" height={160} />

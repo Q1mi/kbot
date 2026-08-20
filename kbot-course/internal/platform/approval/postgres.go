@@ -14,7 +14,7 @@ import (
 type approvalRow interface{ Scan(...any) error }
 
 const approvalColumns = `id,workspace_id,run_id,tool_call_id,tool_version_id,arguments,checkpoint,status,
-decided_by,expires_at,lease_owner,lease_until,fencing_token,attempts,last_error,arguments_hash`
+decided_by,expires_at,lease_owner,lease_until,fencing_token,attempts,last_error,arguments_hash,created_at`
 
 func (s *Service) createPostgres(ctx context.Context, request Request) (*Request, error) {
 	row := s.pool.QueryRow(ctx, `INSERT INTO approval_requests
@@ -112,6 +112,23 @@ func (s *Service) getPostgres(ctx context.Context, workspaceID, requestID string
 	return request, err
 }
 
+func (s *Service) listPostgres(ctx context.Context, workspaceID string) ([]Request, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+approvalColumns+` FROM approval_requests WHERE workspace_id=$1 ORDER BY created_at,id`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Request, 0)
+	for rows.Next() {
+		request, err := scanApproval(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *request)
+	}
+	return result, rows.Err()
+}
+
 func (s *Service) listReadyPostgres(ctx context.Context, limit int) ([]Request, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+approvalColumns+` FROM approval_requests
 		WHERE expires_at>now() AND (status='approved' OR (status='executing' AND lease_until<=now()))
@@ -139,7 +156,7 @@ func scanApproval(row approvalRow) (*Request, error) {
 	err := row.Scan(
 		&request.ID, &request.WorkspaceID, &request.RunID, &request.ToolCallID, &request.ToolVersionID,
 		&request.Arguments, &request.Checkpoint, &request.Status, &request.DecidedBy, &request.ExpiresAt,
-		&request.LeaseOwner, &lease, &fencing, &request.Attempts, &request.LastError, &hash,
+		&request.LeaseOwner, &lease, &fencing, &request.Attempts, &request.LastError, &hash, &request.CreatedAt,
 	)
 	if err != nil {
 		return nil, err

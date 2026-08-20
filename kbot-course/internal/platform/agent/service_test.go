@@ -91,3 +91,20 @@ func TestConversationMessagesAreOrderedAndWorkspaceScoped(t *testing.T) {
 		t.Fatal("expected cross-workspace history lookup to fail")
 	}
 }
+
+func TestConversationDetailIsUserScopedAndStoresMessages(t *testing.T) {
+	service := NewService()
+	_ = service.Publish(t.Context(), domain.AgentVersion{ID: "v1", AgentID: "a", WorkspaceID: "ws"}, engine.AgentSnapshot{ID: "v1", AgentID: "a", WorkspaceID: "ws"})
+	_ = service.Promote(t.Context(), "ws", "a", "dev", "v1")
+	conversation, _ := service.CreateConversation(t.Context(), "ws", "a", "dev", "user-1")
+	if err := service.AppendMessage(t.Context(), "ws", conversation.ID, "user", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	_, messages, err := service.ConversationDetail(t.Context(), "ws", "user-1", conversation.ID)
+	if err != nil || len(messages) != 1 || messages[0].Content != "hello" {
+		t.Fatalf("messages=%+v err=%v", messages, err)
+	}
+	if _, _, err := service.ConversationDetail(t.Context(), "ws", "user-2", conversation.ID); err == nil {
+		t.Fatal("expected user isolation")
+	}
+}

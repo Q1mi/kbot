@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.6
+          cache-dependency-path: |
+            go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+      - name: Go tests
+        run: go test -race -count=1 ./...
+      - name: Go vet
+        run: go vet ./...
+      - name: Crossborder scenario
+        working-directory: projects/crossborder
+        run: go test -race -count=1 ./...
+      - name: Insurance scenario
+        working-directory: projects/insurance
+        run: go test -race -count=1 ./...
+      - name: Admin build
+        working-directory: web/admin
+        run: npm ci && npm run build
+      - name: Compose validation
+        run: docker compose --env-file .env.example -f deploy/compose.yaml config

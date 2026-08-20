@@ -22,3 +22,22 @@ func TestPublishedPromptRendersPinnedTemplate(t *testing.T) {
 		t.Fatal("expected missing variable error")
 	}
 }
+
+func TestPromptVersionsPromoteAndRenderByEnvironment(t *testing.T) {
+	service := NewService()
+	item, first, err := service.Create(t.Context(), "ws", "support", "chat", "v1 {{.name}}", `{}`, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateVersion(t.Context(), "ws", item.ID, "v2 {{.name}}", `{}`, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Promote("ws", item.ID, "prod", second.ID); err != nil {
+		t.Fatal(err)
+	}
+	output, err := service.RenderEnvironment("ws", item.ID, "prod", map[string]any{"name": "kbot"})
+	if err != nil || output != "v2 kbot" || first.Hash == "" || second.Version != 2 {
+		t.Fatalf("first=%+v second=%+v output=%q err=%v", first, second, output, err)
+	}
+}

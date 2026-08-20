@@ -1,4 +1,4 @@
-.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test deploy-config doubao-check
+.PHONY: build test test-race vet verify run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test deploy-config doubao-check
 
 build:
 	@mkdir -p bin
@@ -6,6 +6,14 @@ build:
 
 test:
 	go test ./...
+
+test-race:
+	go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
+verify: vet test-race crossborder-test insurance-test admin-build deploy-config
 
 run:
 	go run ./cmd/server
@@ -28,7 +36,7 @@ migrate-down:
 	migrate -path migrations -database "$(KBOT_DATABASE_URL)" down 1
 
 admin-build:
-	cd web/admin && npm run build
+	cd web/admin && npm ci && npm run build
 
 crossborder-build:
 	$(MAKE) -C projects/crossborder build

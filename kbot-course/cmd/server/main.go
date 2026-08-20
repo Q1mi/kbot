@@ -61,6 +61,12 @@ func main() {
 	}
 	defer pool.Close()
 	iamService := iam.New(iam.NewPostgresStore(pool), cfg.JWTSecret, cfg.JWTIssuer)
+	if cfg.BootstrapEmail != "" {
+		if _, err := iamService.EnsureRegistered(context.Background(), cfg.BootstrapEmail, cfg.BootstrapPassword, cfg.BootstrapName); err != nil {
+			log.Fatalf("bootstrap course administrator: %v", err)
+		}
+		log.Printf("bootstrapped course administrator %s", cfg.BootstrapEmail)
+	}
 	gateway, err := llm.NewGateway(cfg)
 	if err != nil {
 		log.Fatalf("create LLM gateway: %v", err)
@@ -82,7 +88,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
 	}
-	toolExecutor := tooling.NewExecutor(toolRegistry, nil, "crossborder-sim", "insurance-sim", "localhost", "127.0.0.1").WithSandbox(sandboxClient)
+	toolExecutor := tooling.NewExecutor(toolRegistry, nil, cfg.ToolAllowedHosts...).WithSandbox(sandboxClient)
 	toolExecutor.RegisterSDK("search_knowledge_base", func(ctx context.Context, workspaceID string, arguments map[string]any) (tooling.Result, error) {
 		kbID, _ := arguments["kb_id"].(string)
 		query, _ := arguments["query"].(string)
@@ -110,12 +116,13 @@ func main() {
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
-			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
+			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, ToolExecutor: toolExecutor, KBs: knowledgeBases, Search: knowledgeSearch,
 			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards,
 			Evaluator: evaluator, EvalData: evalData, Teams: teams,
 			Webhook:        webhook.NewHandlerWithReplay(cfg.WebhookSecret, replayGuard, channelConsumer.Callback("webhook")),
 			Lark:           lark.NewHandlerWithReplay(cfg.LarkEncryptKey, replayGuard, channelConsumer.Callback("lark")),
 			ApprovalWorker: approvalWorker,
+			Readiness:      sandboxClient.Check,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

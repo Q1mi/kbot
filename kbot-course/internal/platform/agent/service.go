@@ -128,7 +128,8 @@ func (s *Service) CreateConversation(ctx context.Context, workspaceID, agentID, 
 	if !ok {
 		return nil, fmt.Errorf("agent %s has no version promoted to %s", agentID, environment)
 	}
-	conversation := domain.Conversation{ID: fmt.Sprintf("conversation-%d", s.sequence.Add(1)), WorkspaceID: workspaceID, AgentID: agentID, AgentVersionID: versionID, UserID: userID, CreatedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	conversation := domain.Conversation{ID: fmt.Sprintf("conversation-%d", s.sequence.Add(1)), WorkspaceID: workspaceID, AgentID: agentID, AgentVersionID: versionID, UserID: userID, Status: "active", CreatedAt: now, UpdatedAt: now}
 	s.mu.Lock()
 	s.conversations[conversation.ID] = conversation
 	s.mu.Unlock()
@@ -220,6 +221,29 @@ func (s *Service) ListVersions(ctx context.Context, workspaceID, agentID string)
 		if version.WorkspaceID == workspaceID && version.AgentID == agentID {
 			result = append(result, version)
 		}
+	}
+	return result
+}
+
+func (s *Service) ListVersionViews(workspaceID, agentID string) []map[string]any {
+	ctx := context.Background()
+	versions := s.ListVersions(ctx, workspaceID, agentID)
+	result := make([]map[string]any, 0)
+	for _, version := range versions {
+		snapshot, err := s.Snapshot(ctx, workspaceID, version.ID)
+		if err != nil {
+			continue
+		}
+		environments := make([]string, 0)
+		for _, environment := range []string{"dev", "staging", "prod"} {
+			if promoted, err := s.ResolveVersion(ctx, workspaceID, agentID, environment); err == nil && promoted == version.ID {
+				environments = append(environments, environment)
+			}
+		}
+		result = append(result, map[string]any{
+			"id": version.ID, "agent_id": agentID, "version": version.Version, "environments": environments, "created_at": version.CreatedAt,
+			"config": map[string]any{"system_prompt": snapshot.SystemPrompt, "system_prompt_version_id": snapshot.PromptVersionID, "tool_ids": snapshot.ToolVersionIDs, "skill_version_ids": snapshot.SkillVersionIDs, "kb_ids": snapshot.KnowledgeVersionIDs, "max_steps": snapshot.MaxSteps},
+		})
 	}
 	return result
 }

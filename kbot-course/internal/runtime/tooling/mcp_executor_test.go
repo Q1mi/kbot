@@ -44,15 +44,17 @@ func TestExecutorDispatchesAuthenticatedMCPTool(t *testing.T) {
 	}))
 	defer server.Close()
 	registry := platformtool.NewRegistry()
+	endpointConfig := fmt.Sprintf(`{"url":%q,"tool_name":"search"}`, server.URL)
 	if err := registry.Register(t.Context(), platformtool.Version{
 		ID: "mcp-v1", WorkspaceID: "ws-1", Name: "mcp", SourceType: "mcp_server", Endpoint: server.URL,
-		Published: true, AuthConfig: `{"headers":{"Authorization":"Bearer mcp-secret"}}`,
-		InputSchema: []byte(`{"type":"object","required":["tool_name"],"properties":{"tool_name":{"type":"string"},"arguments":{"type":"object"}}}`),
+		EndpointConfig: endpointConfig,
+		Published:      true, AuthConfig: `{"headers":{"Authorization":"Bearer mcp-secret"}}`,
+		InputSchema: []byte(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := NewExecutor(registry, server.Client(), "127.0.0.1").Execute(t.Context(), Call{
-		WorkspaceID: "ws-1", ToolVersionID: "mcp-v1", Arguments: []byte(`{"tool_name":"search","arguments":{"q":"kbot"}}`),
+		WorkspaceID: "ws-1", ToolVersionID: "mcp-v1", Arguments: []byte(`{"q":"kbot"}`),
 	})
 	if err != nil || result.StatusCode != http.StatusOK {
 		t.Fatalf("result = %+v, err = %v", result, err)

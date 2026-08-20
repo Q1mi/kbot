@@ -36,6 +36,7 @@ type Store interface {
 	HasMembership(ctx context.Context, userID, workspaceID string) (bool, error)
 	GetMembership(ctx context.Context, userID, workspaceID string) (*domain.Membership, error)
 	ListUserWorkspaces(ctx context.Context, userID string) ([]*domain.Workspace, error)
+	ListUsers(ctx context.Context) ([]*domain.User, error)
 }
 
 type Service struct {
@@ -77,8 +78,9 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 	if err := s.store.CreateUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
+	now := time.Now().UTC()
 	workspace := &domain.Workspace{
-		ID: newID(), Name: name + " Workspace", CreatedAt: time.Now().UTC(),
+		ID: newID(), Name: name + " Workspace", CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CreateWorkspace(ctx, workspace); err != nil {
 		return nil, fmt.Errorf("create default workspace: %w", err)
@@ -89,6 +91,44 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 		return nil, fmt.Errorf("create default workspace membership: %w", err)
 	}
 	return user, nil
+}
+
+// EnsureRegistered 让 Compose 首启账号在服务重启时保持幂等。
+func (s *Service) EnsureRegistered(ctx context.Context, email, password, name string) (*domain.User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err == nil {
+		return user, nil
+	}
+	if !errors.Is(err, ErrUserNotFound) {
+		return nil, fmt.Errorf("lookup bootstrap user: %w", err)
+	}
+	return s.Register(ctx, email, password, name)
+}
+
+func (s *Service) ListUsers(ctx context.Context) ([]*domain.User, error) {
+	return s.store.ListUsers(ctx)
+}
+
+func (s *Service) CreateWorkspace(ctx context.Context, ownerID, name, description, parentID string) (*domain.Workspace, error) {
+	name = strings.TrimSpace(name)
+	if ownerID == "" || name == "" {
+		return nil, fmt.Errorf("owner and workspace name are required")
+	}
+	if parentID != "" {
+		if err := s.CheckWorkspaceAccess(ctx, ownerID, parentID); err != nil {
+			return nil, fmt.Errorf("parent workspace: %w", err)
+		}
+	}
+	now := time.Now().UTC()
+	workspace := &domain.Workspace{ID: newID(), Name: name, Description: strings.TrimSpace(description), ParentID: parentID, CreatedAt: now, UpdatedAt: now}
+	if err := s.store.CreateWorkspace(ctx, workspace); err != nil {
+		return nil, err
+	}
+	if err := s.store.AddMembership(ctx, &domain.Membership{UserID: ownerID, WorkspaceID: workspace.ID, Role: "owner", CreatedAt: now}); err != nil {
+		return nil, err
+	}
+	return workspace, nil
 }
 
 func (s *Service) CheckWorkspaceAccess(ctx context.Context, userID, workspaceID string) error {

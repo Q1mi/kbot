@@ -164,15 +164,30 @@ func (e *Executor) Execute(ctx context.Context, call Call) (Result, error) {
 		return handler(ctx, call.WorkspaceID, arguments)
 	}
 	if version.SourceType == "mcp_server" {
-		endpoint, err := url.Parse(version.Endpoint)
+		endpointURL := version.Endpoint
+		toolName, _ := arguments["tool_name"].(string)
+		toolArguments, _ := arguments["arguments"].(map[string]any)
+		if strings.TrimSpace(version.EndpointConfig) != "" {
+			var config struct {
+				URL      string `json:"url"`
+				ToolName string `json:"tool_name"`
+			}
+			if err := json.Unmarshal([]byte(version.EndpointConfig), &config); err != nil || strings.TrimSpace(config.URL) == "" {
+				return Result{}, fmt.Errorf("MCP endpoint_config requires url")
+			}
+			endpointURL = config.URL
+			if strings.TrimSpace(config.ToolName) != "" {
+				toolName = config.ToolName
+				toolArguments = arguments
+			}
+		}
+		endpoint, err := url.Parse(endpointURL)
 		if err != nil {
 			return Result{}, fmt.Errorf("parse MCP endpoint: %w", err)
 		}
 		if err := e.validateEndpoint(endpoint); err != nil {
 			return Result{}, err
 		}
-		toolName, _ := arguments["tool_name"].(string)
-		toolArguments, _ := arguments["arguments"].(map[string]any)
 		if strings.TrimSpace(toolName) == "" {
 			return Result{}, fmt.Errorf("MCP tool requires tool_name")
 		}
@@ -201,6 +216,10 @@ func (e *Executor) Execute(ctx context.Context, call Call) (Result, error) {
 		}
 		client := NewA2AClient(version.Endpoint, hosts...)
 		client.client = e.client
+		client.headers, err = toolAuthHeaders(version.AuthConfig)
+		if err != nil {
+			return Result{}, err
+		}
 		result, err := client.Send(ctx, remoteVersionID, message)
 		if err != nil {
 			return Result{}, err
@@ -336,22 +355,31 @@ func validateArguments(schemaJSON, arguments []byte) error {
 }
 
 func toolAuthHeaders(raw string) (map[string]string, error) {
+	result := make(map[string]string)
 	if strings.TrimSpace(raw) == "" {
-		return nil, nil
+		return result, nil
 	}
 	var config struct {
+		Header  string            `json:"header"`
+		Value   string            `json:"value"`
 		Headers map[string]string `json:"headers"`
 	}
 	if err := json.Unmarshal([]byte(raw), &config); err != nil {
 		return nil, fmt.Errorf("invalid tool auth config: %w", err)
 	}
-	for name := range config.Headers {
+	if config.Header != "" {
+		result[config.Header] = config.Value
+	}
+	for name, value := range config.Headers {
+		result[name] = value
+	}
+	for name := range result {
 		switch strings.ToLower(strings.TrimSpace(name)) {
 		case "", "host", "content-length", "connection", "transfer-encoding":
 			return nil, fmt.Errorf("tool auth header %q is not allowed", name)
 		}
 	}
-	return config.Headers, nil
+	return result, nil
 }
 
 func sameOrigin(left, right *url.URL) bool {

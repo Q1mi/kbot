@@ -21,6 +21,7 @@ type A2AClient struct {
 	cardURL      string
 	client       *http.Client
 	allowedHosts map[string]struct{}
+	headers      map[string]string
 }
 
 type AgentCard struct {
@@ -151,6 +152,9 @@ func (c *A2AClient) fetchCard(ctx context.Context) (AgentCard, error) {
 }
 
 func (c *A2AClient) do(req *http.Request) ([]byte, error) {
+	for name, value := range c.headers {
+		req.Header.Set(name, value)
+	}
 	client := c.client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}

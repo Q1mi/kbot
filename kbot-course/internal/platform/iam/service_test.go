@@ -71,3 +71,34 @@ func TestWorkspaceRoleComesFromMembership(t *testing.T) {
 		t.Fatalf("WorkspaceRole() = %q, %v", role, err)
 	}
 }
+
+func TestCreateWorkspaceAddsOwnerMembership(t *testing.T) {
+	svc := New(NewMemoryStore(), testSecret, "kbot-test")
+	user, _ := svc.Register(t.Context(), "owner@example.com", "password123", "Owner")
+	workspace, err := svc.CreateWorkspace(t.Context(), user.ID, "Claims", "insurance", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CheckWorkspaceAccess(t.Context(), user.ID, workspace.ID); err != nil {
+		t.Fatal(err)
+	}
+	users, _ := svc.ListUsers(t.Context())
+	if len(users) != 1 || users[0].PasswordHash == "" {
+		t.Fatalf("users=%+v", users)
+	}
+}
+
+func TestEnsureRegisteredIsIdempotent(t *testing.T) {
+	service := New(NewMemoryStore(), testSecret, "kbot-test")
+	first, err := service.EnsureRegistered(t.Context(), "admin@example.com", "password123", "Admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.EnsureRegistered(t.Context(), "admin@example.com", "different-password", "Changed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || second.Name != "Admin" {
+		t.Fatalf("bootstrap user changed: first=%+v second=%+v", first, second)
+	}
+}

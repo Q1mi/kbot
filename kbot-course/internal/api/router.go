@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/retriever"
+	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
 type ControlPlane struct {
@@ -35,6 +37,7 @@ type ControlPlane struct {
 	Approvals      *approval.Service
 	Audit          *audit.Ledger
 	Tools          *platformtool.Registry
+	ToolExecutor   *tooling.Executor
 	KBs            *kb.Service
 	Search         *retriever.KnowledgeSearch
 	Prompts        *prompt.Service
@@ -47,6 +50,7 @@ type ControlPlane struct {
 	Webhook        http.Handler
 	Lark           http.Handler
 	ApprovalWorker interface{ Wake() }
+	Readiness      func(context.Context) error
 }
 
 type runtimeEvalAgent struct {
@@ -118,6 +122,21 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if control.Readiness != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			if err := control.Readiness(ctx); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "error": err.Error()})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	})
+	router.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte("kbot_up 1\n"))
+	})
 	if control.Webhook != nil {
 		router.Method(http.MethodPost, "/api/v1/integrations/webhook", control.Webhook)
 	}
@@ -159,6 +178,31 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				return
 			}
 			writeJSON(w, http.StatusOK, workspaces)
+		})
+		protected.Get("/api/v1/users", func(w http.ResponseWriter, r *http.Request) {
+			users, err := iamService.ListUsers(r.Context())
+			if err != nil {
+				http.Error(w, "list users", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, users)
+		})
+		protected.Post("/api/v1/workspaces", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				ParentID    string `json:"parent_id"`
+			}
+			if json.NewDecoder(r.Body).Decode(&req) != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			workspace, err := iamService.CreateWorkspace(r.Context(), middleware.UserID(r.Context()), req.Name, req.Description, req.ParentID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusCreated, workspace)
 		})
 		protected.With(middleware.Workspace(iamService)).Get("/api/v1/context", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{
@@ -205,7 +249,14 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				writeJSON(w, http.StatusOK, item)
 			})
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/agents/{agentID}/versions", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Agents.ListVersions(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "agentID")))
+				writeJSON(w, http.StatusOK, control.Agents.ListVersionViews(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "agentID")))
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/agents/{agentID}/input-schema", func(w http.ResponseWriter, r *http.Request) {
+				if _, err := control.Agents.GetAgent(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "agentID")); err != nil {
+					http.Error(w, "agent not found", http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 			})
 			protected.With(middleware.Workspace(iamService)).Post("/api/v1/agents/{agentID}/versions", func(w http.ResponseWriter, r *http.Request) {
 				var req agentConfigRequest
@@ -273,6 +324,10 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 						return
 					}
 					req.ConversationID, req.WorkspaceID, req.UserID = conversation.ID, workspaceID, middleware.UserID(r.Context())
+					if err := control.Agents.AppendMessage(r.Context(), workspaceID, conversation.ID, "user", req.Message); err != nil {
+						http.Error(w, err.Error(), http.StatusNotFound)
+						return
+					}
 					var content, status string
 					err = runtime.ChatStream(r.Context(), req, func(event engine.Event) error {
 						if event.Type == "answer_done" {
@@ -289,13 +344,16 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 						http.Error(w, err.Error(), http.StatusBadGateway)
 						return
 					}
+					if content != "" {
+						_ = control.Agents.AppendMessage(r.Context(), workspaceID, conversation.ID, "assistant", content)
+					}
 					writeJSON(w, http.StatusOK, map[string]string{"content": content, "conversation_id": conversation.ID, "status": status})
 				})
 			}
 		}
 		if control.Tools != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/tools", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Tools.List(r.Context(), middleware.WorkspaceID(r.Context())))
+				writeJSON(w, http.StatusOK, control.Tools.ListTools(middleware.WorkspaceID(r.Context())))
 			})
 			protected.With(middleware.Workspace(iamService)).Post("/api/v1/tools", func(w http.ResponseWriter, r *http.Request) {
 				var req struct {
@@ -305,34 +363,26 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					SchemaJSON     string `json:"schema_json"`
 					EndpointConfig string `json:"endpoint_config"`
 					AuthConfig     string `json:"auth_config"`
+					RetryPolicy    string `json:"retry_policy"`
 					Sensitive      bool   `json:"sensitive"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					http.Error(w, "invalid JSON", http.StatusBadRequest)
 					return
 				}
-				var endpoint struct {
-					URL     string `json:"url"`
-					SDKName string `json:"sdk_name"`
-					CardURL string `json:"card_url"`
-				}
-				if err := json.Unmarshal([]byte(req.EndpointConfig), &endpoint); err != nil {
+				executableEndpoint, err := executableToolEndpoint(req.SourceType, req.EndpointConfig)
+				if err != nil {
 					http.Error(w, "invalid endpoint_config", http.StatusBadRequest)
 					return
 				}
 				versionID := fmt.Sprintf("tool-version-%d", time.Now().UnixNano())
-				executableEndpoint := endpoint.URL
-				if req.SourceType == "internal_sdk" {
-					executableEndpoint = endpoint.SDKName
-				} else if req.SourceType == "a2a" {
-					executableEndpoint = endpoint.CardURL
-				}
 				version := platformtool.Version{
-					ID: versionID, ToolID: versionID,
+					ID: versionID, ToolID: versionID, Version: 1,
 					WorkspaceID: middleware.WorkspaceID(r.Context()), Name: req.Name,
 					SourceType: req.SourceType, Description: req.Description,
 					InputSchema: []byte(req.SchemaJSON), Endpoint: executableEndpoint,
-					AuthConfig: req.AuthConfig, HasAuth: req.AuthConfig != "",
+					EndpointConfig: req.EndpointConfig,
+					AuthConfig:     req.AuthConfig, RetryPolicy: req.RetryPolicy,
 					Sensitive: req.Sensitive, Published: true, CreatedAt: time.Now().UTC(),
 				}
 				if err := control.Tools.Register(r.Context(), version); err != nil {
@@ -340,6 +390,94 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					return
 				}
 				writeJSON(w, http.StatusCreated, version)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/tools/{toolID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				versions, err := control.Tools.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, toolVersionViews(versions))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/tools/{toolID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					SchemaJSON     string `json:"schema_json"`
+					EndpointConfig string `json:"endpoint_config"`
+					AuthConfig     string `json:"auth_config"`
+					RetryPolicy    string `json:"retry_policy"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				versions, err := control.Tools.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				base := versions[0]
+				endpoint, err := executableToolEndpoint(base.SourceType, req.EndpointConfig)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				version := platformtool.Version{ID: fmt.Sprintf("tool-version-%d", time.Now().UnixNano()), ToolID: base.ToolID, Version: base.Version + 1, WorkspaceID: base.WorkspaceID, Name: base.Name, SourceType: base.SourceType, Description: base.Description, InputSchema: []byte(req.SchemaJSON), Endpoint: endpoint, EndpointConfig: req.EndpointConfig, AuthConfig: req.AuthConfig, RetryPolicy: req.RetryPolicy, Sensitive: base.Sensitive, CreatedAt: time.Now().UTC()}
+				if err := control.Tools.Register(r.Context(), version); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, toolVersionViews([]platformtool.Version{version})[0])
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/tools/{toolID}/versions/{versionID}/publish", func(w http.ResponseWriter, r *http.Request) {
+				if err := control.Tools.PublishVersion(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"), chi.URLParam(r, "versionID")); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/tools/{toolID}/publish", func(w http.ResponseWriter, r *http.Request) {
+				versions, err := control.Tools.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"))
+				if err != nil || control.Tools.PublishVersion(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"), versions[0].ID) != nil {
+					http.Error(w, "tool publish failed", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/tools/{toolID}/test", func(w http.ResponseWriter, r *http.Request) {
+				if control.ToolExecutor == nil {
+					http.Error(w, "tool sandbox unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				var req struct {
+					Input json.RawMessage `json:"input"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				versions, err := control.Tools.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "toolID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				versionID := ""
+				for _, version := range versions {
+					if version.Published {
+						versionID = version.ID
+						break
+					}
+				}
+				if versionID == "" {
+					http.Error(w, "publish a tool version before testing", http.StatusConflict)
+					return
+				}
+				started := time.Now()
+				result, callErr := control.ToolExecutor.Execute(r.Context(), tooling.Call{WorkspaceID: middleware.WorkspaceID(r.Context()), ToolVersionID: versionID, Arguments: req.Input, IdempotencyKey: fmt.Sprintf("sandbox-%d", time.Now().UnixNano())})
+				status, errorText := "success", ""
+				if callErr != nil {
+					status, errorText = "failed", callErr.Error()
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"id": fmt.Sprintf("tool-run-%d", time.Now().UnixNano()), "tool_id": chi.URLParam(r, "toolID"), "tool_version_id": versionID, "input": string(req.Input), "output": string(result.Body), "status": status, "latency_ms": time.Since(started).Milliseconds(), "error": errorText})
 			})
 		}
 		if control.KBs != nil {
@@ -384,6 +522,22 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				}
 				writeJSON(w, http.StatusOK, documents)
 			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/kbs/{kbID}/connectors", func(w http.ResponseWriter, r *http.Request) {
+				items, err := control.KBs.Connectors(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "kbID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, items)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/kbs/{kbID}/jobs", func(w http.ResponseWriter, r *http.Request) {
+				items, err := control.KBs.Jobs(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "kbID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, items)
+			})
 			if control.Search != nil {
 				protected.With(middleware.Workspace(iamService)).Post("/api/v1/kbs/{kbID}/search", func(w http.ResponseWriter, r *http.Request) {
 					var req struct {
@@ -409,81 +563,281 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 		}
 		if control.Prompts != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/prompts", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Prompts.List(r.Context(), middleware.WorkspaceID(r.Context())))
+				writeJSON(w, http.StatusOK, control.Prompts.ListPrompts(middleware.WorkspaceID(r.Context())))
 			})
 			protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts", func(w http.ResponseWriter, r *http.Request) {
 				var req struct {
-					Name     string `json:"name"`
-					Category string `json:"category"`
-					Template string `json:"template"`
+					Name                  string         `json:"name"`
+					Category              string         `json:"category"`
+					Template              string         `json:"template"`
+					VariablesSchema       string         `json:"variables_schema"`
+					ModelProfileVersionID string         `json:"model_profile_version_id"`
+					GenerationConfig      map[string]any `json:"generation_config"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					http.Error(w, "invalid JSON", http.StatusBadRequest)
 					return
 				}
-				version := prompt.Version{ID: fmt.Sprintf("prompt-version-%d", time.Now().UnixNano()), WorkspaceID: middleware.WorkspaceID(r.Context()), Name: req.Name, Category: req.Category, Template: req.Template}
-				if err := control.Prompts.Publish(r.Context(), version); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				writeJSON(w, http.StatusCreated, map[string]any{"prompt": version, "version": version})
-			})
-		}
-		if control.Profiles != nil {
-			protected.With(middleware.Workspace(iamService)).Get("/api/v1/model-profiles", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Profiles.List(r.Context(), middleware.WorkspaceID(r.Context())))
-			})
-			protected.With(middleware.Workspace(iamService)).Post("/api/v1/model-profiles", func(w http.ResponseWriter, r *http.Request) {
-				var req struct {
-					Name              string `json:"name"`
-					ClassificationMax string `json:"classification_max"`
-					Provider          string `json:"provider"`
-					Model             string `json:"model"`
-					BaseURL           string `json:"base_url"`
-					APIKey            string `json:"api_key"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					http.Error(w, "invalid JSON", http.StatusBadRequest)
-					return
-				}
-				if req.ClassificationMax == "" {
-					req.ClassificationMax = "internal"
-				}
-				if req.Provider == "" {
-					req.Provider = "openai-compatible"
-				}
-				if req.Model == "" {
-					req.Model = "kbot-course-model"
-				}
-				if req.BaseURL == "" {
-					req.BaseURL = "http://mockllm:8081/v1"
-				}
-				profile := modelconfig.ProfileVersion{ID: fmt.Sprintf("model-profile-version-%d", time.Now().UnixNano()), WorkspaceID: middleware.WorkspaceID(r.Context()), Name: req.Name, ClassificationMax: req.ClassificationMax, Deployments: []modelconfig.Deployment{{Provider: req.Provider, Model: req.Model, BaseURL: req.BaseURL, APIKey: req.APIKey, HasAPIKey: req.APIKey != ""}}}
-				if err := control.Profiles.Publish(r.Context(), profile); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				writeJSON(w, http.StatusCreated, map[string]any{"profile": profile, "version": profile})
-			})
-		}
-		if control.Skills != nil {
-			protected.With(middleware.Workspace(iamService)).Get("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Skills.List(r.Context(), middleware.WorkspaceID(r.Context())))
-			})
-			protected.With(middleware.Workspace(iamService)).Post("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
-				var req struct {
-					SkillMD string `json:"skill_md"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					http.Error(w, "invalid JSON", http.StatusBadRequest)
-					return
-				}
-				version, err := control.Skills.Publish(r.Context(), fmt.Sprintf("skill-version-%d", time.Now().UnixNano()), middleware.WorkspaceID(r.Context()), []byte(req.SkillMD))
+				item, version, err := control.Prompts.Create(r.Context(), middleware.WorkspaceID(r.Context()), req.Name, req.Category, req.Template, req.VariablesSchema, req.ModelProfileVersionID, req.GenerationConfig)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				writeJSON(w, http.StatusCreated, map[string]any{"skill": version, "version": version})
+				writeJSON(w, http.StatusCreated, map[string]any{"prompt": item, "version": version})
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/prompts/{promptID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				versions, err := control.Prompts.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "promptID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, versions)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts/{promptID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Template              string         `json:"template"`
+					VariablesSchema       string         `json:"variables_schema"`
+					ModelProfileVersionID string         `json:"model_profile_version_id"`
+					GenerationConfig      map[string]any `json:"generation_config"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				version, err := control.Prompts.CreateVersion(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "promptID"), req.Template, req.VariablesSchema, req.ModelProfileVersionID, req.GenerationConfig)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, version)
+			})
+			for _, action := range []string{"promote", "rollback"} {
+				action := action
+				protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts/{promptID}/"+action, func(w http.ResponseWriter, r *http.Request) {
+					var req struct {
+						Env       string `json:"env"`
+						VersionID string `json:"version_id"`
+					}
+					if json.NewDecoder(r.Body).Decode(&req) != nil || control.Prompts.Promote(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "promptID"), req.Env, req.VersionID) != nil {
+						http.Error(w, "invalid prompt promotion", http.StatusBadRequest)
+						return
+					}
+					w.WriteHeader(http.StatusNoContent)
+				})
+			}
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts/{promptID}/render", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Env  string         `json:"env"`
+					Vars map[string]any `json:"vars"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				rendered, err := control.Prompts.RenderEnvironment(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "promptID"), req.Env, req.Vars)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]string{"rendered": rendered})
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts/{promptID}/rollouts", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Env                string `json:"env"`
+					CandidateVersionID string `json:"candidate_version_id"`
+					TrafficPercent     int    `json:"traffic_percent"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil || control.Prompts.StartRollout(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "promptID"), req.Env, req.CandidateVersionID, req.TrafficPercent) != nil {
+					http.Error(w, "invalid rollout", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected.With(middleware.Workspace(iamService)).Put("/api/v1/prompts/{promptID}/rollouts/traffic", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Env            string `json:"env"`
+					TrafficPercent int    `json:"traffic_percent"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil || control.Prompts.UpdateRollout(chi.URLParam(r, "promptID"), req.Env, req.TrafficPercent) != nil {
+					http.Error(w, "invalid rollout", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			for _, action := range []string{"complete", "rollback"} {
+				action := action
+				protected.With(middleware.Workspace(iamService)).Post("/api/v1/prompts/{promptID}/rollouts/"+action, func(w http.ResponseWriter, r *http.Request) {
+					var req struct {
+						Env string `json:"env"`
+					}
+					if json.NewDecoder(r.Body).Decode(&req) != nil {
+						http.Error(w, "invalid JSON", http.StatusBadRequest)
+						return
+					}
+					var err error
+					if action == "complete" {
+						err = control.Prompts.CompleteRollout(chi.URLParam(r, "promptID"), req.Env)
+					} else {
+						err = control.Prompts.RollbackRollout(chi.URLParam(r, "promptID"), req.Env)
+					}
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					w.WriteHeader(http.StatusNoContent)
+				})
+			}
+		}
+		if control.Profiles != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/model-accounts", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Profiles.ListAccounts(middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/model-accounts", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Name    string `json:"name"`
+					Kind    string `json:"kind"`
+					BaseURL string `json:"base_url"`
+					APIKey  string `json:"api_key"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				item, err := control.Profiles.CreateAccount(middleware.WorkspaceID(r.Context()), req.Name, req.Kind, req.BaseURL, req.APIKey)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, item)
+			})
+			protected.With(middleware.Workspace(iamService)).Put("/api/v1/model-accounts/{accountID}/api-key", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					APIKey string `json:"api_key"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil || control.Profiles.RotateAPIKey(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "accountID"), req.APIKey) != nil {
+					http.Error(w, "invalid API key rotation", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/model-deployments", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Profiles.ListDeployments(middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/model-deployments", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					ProviderAccountID string `json:"provider_account_id"`
+					Name              string `json:"name"`
+					ModelName         string `json:"model_name"`
+					Region            string `json:"region"`
+					TimeoutMS         int    `json:"timeout_ms"`
+					MaxRetries        int    `json:"max_retries"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				item, err := control.Profiles.CreateDeployment(middleware.WorkspaceID(r.Context()), req.ProviderAccountID, req.Name, req.ModelName, req.Region, req.TimeoutMS, req.MaxRetries)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, item)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/model-profiles", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Profiles.ListProfileDefinitions(middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/model-profiles", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Name                  string   `json:"name"`
+					Description           string   `json:"description"`
+					ClassificationMax     string   `json:"classification_max"`
+					PrimaryDeploymentID   string   `json:"primary_deployment_id"`
+					FallbackDeploymentIDs []string `json:"fallback_deployment_ids"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				profile, version, err := control.Profiles.CreateProfile(r.Context(), middleware.WorkspaceID(r.Context()), req.Name, req.Description, req.PrimaryDeploymentID, req.FallbackDeploymentIDs, req.ClassificationMax)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, map[string]any{"profile": profile, "version": version})
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/model-profile-versions", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Profiles.List(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/model-profiles/{profileID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					ClassificationMax     string   `json:"classification_max"`
+					PrimaryDeploymentID   string   `json:"primary_deployment_id"`
+					FallbackDeploymentIDs []string `json:"fallback_deployment_ids"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				version, err := control.Profiles.CreateProfileVersion(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "profileID"), req.PrimaryDeploymentID, req.FallbackDeploymentIDs, req.ClassificationMax)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, version)
+			})
+		}
+		if control.Skills != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Skills.ListSkills(middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Category string `json:"category"`
+					SkillMD  string `json:"skill_md"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				item, version, err := control.Skills.Create(r.Context(), middleware.WorkspaceID(r.Context()), req.Category, []byte(req.SkillMD))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, map[string]any{"skill": item, "version": version})
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/skills/{skillID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				versions, err := control.Skills.ListVersions(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "skillID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, versions)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/skills/{skillID}/versions", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					SkillMD string `json:"skill_md"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				version, err := control.Skills.CreateVersion(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "skillID"), []byte(req.SkillMD))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, version)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/skills/{skillID}/publish", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					VersionID string `json:"version_id"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil || control.Skills.PublishVersion(middleware.WorkspaceID(r.Context()), chi.URLParam(r, "skillID"), req.VersionID) != nil {
+					http.Error(w, "invalid skill publish", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
 			})
 		}
 		if control.Approvals != nil {
@@ -589,6 +943,9 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				}
 				writeJSON(w, http.StatusOK, quota)
 			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/guard/injection-logs", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Guard.InjectionLogs(middleware.WorkspaceID(r.Context())))
+			})
 		}
 		if control.Audit != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/audit/logs", func(w http.ResponseWriter, r *http.Request) {
@@ -608,7 +965,37 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					}
 					filtered = append(filtered, event)
 				}
-				writeJSON(w, http.StatusOK, filtered)
+				limit := 100
+				if len(filtered) > limit {
+					filtered = filtered[len(filtered)-limit:]
+				}
+				writeJSON(w, http.StatusOK, auditViews(filtered))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/audit/exports", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					ConversationID string `json:"conversation_id"`
+				}
+				if json.NewDecoder(r.Body).Decode(&req) != nil || req.ConversationID == "" {
+					http.Error(w, "conversation_id is required", http.StatusBadRequest)
+					return
+				}
+				events, err := control.Audit.List(r.Context(), middleware.WorkspaceID(r.Context()))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				var csv strings.Builder
+				csv.WriteString("id,actor,action,resource_id,created_at,hash\n")
+				count := 0
+				for _, event := range events {
+					if event.ResourceID != req.ConversationID {
+						continue
+					}
+					fmt.Fprintf(&csv, "%q,%q,%q,%q,%q,%q\n", event.ID, event.ActorID, event.Action, event.ResourceID, event.CreatedAt.Format(time.RFC3339Nano), event.Hash)
+					count++
+				}
+				key := "audit-" + req.ConversationID + ".csv"
+				writeJSON(w, http.StatusOK, map[string]any{"key": key, "count": count, "url": "data:text/csv;base64," + base64.StdEncoding.EncodeToString([]byte(csv.String()))})
 			})
 		}
 		if control.Evaluator != nil && control.EvalData != nil {
@@ -747,13 +1134,39 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 		}
 		if control.Approvals != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/approvals", func(w http.ResponseWriter, r *http.Request) {
-				writeJSON(w, http.StatusOK, control.Approvals.List(r.Context(), middleware.WorkspaceID(r.Context())))
+				requests := control.Approvals.List(r.Context(), middleware.WorkspaceID(r.Context()))
+				views := make([]map[string]any, 0)
+				for _, request := range requests {
+					if request.Status != approval.StatusPending {
+						continue
+					}
+					views = append(views, map[string]any{"id": request.ID, "conversation_id": request.RunID, "action": request.ToolVersionID, "payload": string(request.Arguments), "status": request.Status, "created_at": request.CreatedAt})
+				}
+				writeJSON(w, http.StatusOK, views)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/approvals/{approvalID}/reject", func(w http.ResponseWriter, r *http.Request) {
+				if err := control.Approvals.Decide(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "approvalID"), middleware.UserID(r.Context()), false); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/approvals/{approvalID}/approve", func(w http.ResponseWriter, r *http.Request) {
+				workspaceID, approvalID := middleware.WorkspaceID(r.Context()), chi.URLParam(r, "approvalID")
+				if err := control.Approvals.Decide(r.Context(), workspaceID, approvalID, middleware.UserID(r.Context()), true); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				if control.ApprovalWorker != nil {
+					control.ApprovalWorker.Wake()
+				}
+				w.WriteHeader(http.StatusNoContent)
 			})
 		}
 		protected.With(middleware.Workspace(iamService)).Get("/api/v1/observability", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"service": "kbot-course", "workspace_id": middleware.WorkspaceID(r.Context()),
-				"tracing": "opentelemetry", "session_key": "conversation_id",
+				"metrics_url": "/metrics", "healthz_url": "/healthz", "readyz_url": "/readyz",
+				"otlp_endpoint": "", "traces_enabled": true, "workspace_id": middleware.WorkspaceID(r.Context()),
 			})
 		})
 		if runtime != nil {
@@ -778,4 +1191,60 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func executableToolEndpoint(sourceType, raw string) (string, error) {
+	var endpoint struct {
+		URL      string `json:"url"`
+		SDKName  string `json:"sdk_name"`
+		CardURL  string `json:"card_url"`
+		Language string `json:"language"`
+	}
+	if err := json.Unmarshal([]byte(raw), &endpoint); err != nil {
+		return "", err
+	}
+	switch sourceType {
+	case "code_execution":
+		language := strings.TrimSpace(endpoint.Language)
+		if language != "python" && language != "bash" {
+			return "", fmt.Errorf("code_execution language must be python or bash")
+		}
+		return language, nil
+	case "internal_sdk":
+		return endpoint.SDKName, nil
+	case "a2a":
+		return endpoint.CardURL, nil
+	default:
+		return endpoint.URL, nil
+	}
+}
+
+func toolVersionViews(versions []platformtool.Version) []map[string]any {
+	result := make([]map[string]any, 0, len(versions))
+	for _, version := range versions {
+		status := "draft"
+		if version.Published {
+			status = "published"
+		}
+		result = append(result, map[string]any{
+			"id": version.ID, "tool_id": version.ToolID, "version": version.Version,
+			"schema_json": string(version.InputSchema), "endpoint_config": version.EndpointConfig,
+			"auth_config": version.AuthConfig, "retry_policy": version.RetryPolicy,
+			"status": status, "created_at": version.CreatedAt,
+		})
+	}
+	return result
+}
+
+func auditViews(events []audit.Event) []map[string]any {
+	result := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		data, _ := json.Marshal(event.Data)
+		result = append(result, map[string]any{
+			"id": event.ID, "actor": event.ActorID, "action": event.Action,
+			"resource_type": "conversation", "resource_id": event.ResourceID,
+			"after_json": string(data), "created_at": event.CreatedAt,
+		})
+	}
+	return result
 }

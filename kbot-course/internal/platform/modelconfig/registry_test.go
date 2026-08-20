@@ -41,3 +41,26 @@ func TestModelProfileEncryptsProviderAPIKeyAndRedactsList(t *testing.T) {
 		t.Fatalf("resolved profile = %#v, %v", resolved, err)
 	}
 }
+
+func TestConsoleCatalogBuildsRuntimeProfileFromDeployment(t *testing.T) {
+	registry := NewRegistry()
+	account, err := registry.CreateAccount("ws", "classroom", "openai-compatible", "http://mockllm:8090/v1", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := registry.CreateDeployment("ws", account.ID, "mock", "course-model", "local", 30000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, version, err := registry.CreateProfile(t.Context(), "ws", "default", "course", deployment.ID, nil, "internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := registry.Resolve(t.Context(), "ws", version.ID)
+	if err != nil || resolved.ProfileID != profile.ID || resolved.Deployments[0].Model != "course-model" {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	if resolved.Deployments[0].APIKey != "secret" {
+		t.Fatalf("runtime profile lost provider credential: %+v", resolved.Deployments[0])
+	}
+}

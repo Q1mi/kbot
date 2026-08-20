@@ -22,9 +22,14 @@ type ConversationResolver interface {
 	ResolveConversation(ctx context.Context, workspaceID, userID, agentID, environment, conversationID string) (*domain.Conversation, error)
 }
 
+type MessageRecorder interface {
+	AppendMessage(ctx context.Context, workspaceID, conversationID, role, content string) error
+}
+
 type StreamHandler struct {
 	runtime       ChatRuntime
 	conversations ConversationResolver
+	messages      MessageRecorder
 }
 
 func NewStreamHandler(runtime ChatRuntime) *StreamHandler {
@@ -33,6 +38,9 @@ func NewStreamHandler(runtime ChatRuntime) *StreamHandler {
 
 func (h *StreamHandler) WithConversations(conversations ConversationResolver) *StreamHandler {
 	h.conversations = conversations
+	if recorder, ok := conversations.(MessageRecorder); ok {
+		h.messages = recorder
+	}
 	return h
 }
 
@@ -62,6 +70,12 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "conversation_id is required", http.StatusBadRequest)
 		return
 	}
+	if h.messages != nil {
+		if err := h.messages.AppendMessage(r.Context(), req.WorkspaceID, req.ConversationID, "user", req.Message); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -71,9 +85,13 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	errorEventWritten := false
+	answer := ""
 	err := h.runtime.ChatStream(r.Context(), req, func(event engine.Event) error {
 		if event.Type == "error" {
 			errorEventWritten = true
+		}
+		if event.Type == "answer_done" {
+			answer = event.Text
 		}
 		payload, err := json.Marshal(event)
 		if err != nil {
@@ -85,6 +103,9 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return nil
 	})
+	if answer != "" && h.messages != nil {
+		_ = h.messages.AppendMessage(r.Context(), req.WorkspaceID, req.ConversationID, "assistant", answer)
+	}
 	if err != nil && !errorsIsCanceled(err) && !errorEventWritten {
 		payload, _ := json.Marshal(engine.Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)

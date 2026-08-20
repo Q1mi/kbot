@@ -17,21 +17,34 @@ import (
 )
 
 type Version struct {
-	ID          string    `json:"id"`
-	ToolID      string    `json:"tool_id"`
-	WorkspaceID string    `json:"workspace_id"`
-	Name        string    `json:"name"`
-	SourceType  string    `json:"source_type"`
-	Description string    `json:"description"`
-	InputSchema []byte    `json:"-"`
-	Endpoint    string    `json:"-"`
-	AuthConfig  string    `json:"-"`
-	HasAuth     bool      `json:"has_auth"`
-	Sensitive   bool      `json:"sensitive"`
-	Published   bool      `json:"published"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	ToolID         string    `json:"tool_id"`
+	Version        int       `json:"version"`
+	WorkspaceID    string    `json:"workspace_id"`
+	Name           string    `json:"name"`
+	SourceType     string    `json:"source_type"`
+	Description    string    `json:"description"`
+	InputSchema    []byte    `json:"-"`
+	Endpoint       string    `json:"-"`
+	EndpointConfig string    `json:"endpoint_config,omitempty"`
+	AuthConfig     string    `json:"-"`
+	HasAuth        bool      `json:"has_auth"`
+	RetryPolicy    string    `json:"retry_policy,omitempty"`
+	Sensitive      bool      `json:"sensitive"`
+	Published      bool      `json:"published"`
+	CreatedAt      time.Time `json:"created_at"`
 
 	authCiphertext []byte
+}
+
+type Tool struct {
+	ID, WorkspaceID, Name, SourceType, Description string
+	Sensitive                                      bool
+	CreatedAt                                      time.Time
+}
+
+func (t Tool) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"id": t.ID, "workspace_id": t.WorkspaceID, "name": t.Name, "source_type": t.SourceType, "description": t.Description, "sensitive": t.Sensitive, "created_at": t.CreatedAt})
 }
 
 func (r *Registry) List(_ context.Context, workspaceID string) []Version {
@@ -49,6 +62,53 @@ func (r *Registry) List(_ context.Context, workspaceID string) []Version {
 	}
 	sort.Slice(versions, func(i, j int) bool { return versions[i].ID < versions[j].ID })
 	return versions
+}
+
+func (r *Registry) ListTools(workspaceID string) []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]Tool, 0)
+	seen := make(map[string]struct{})
+	for _, version := range r.versions {
+		if version.WorkspaceID != workspaceID {
+			continue
+		}
+		if _, exists := seen[version.ToolID]; exists {
+			continue
+		}
+		seen[version.ToolID] = struct{}{}
+		result = append(result, Tool{ID: version.ToolID, WorkspaceID: workspaceID, Name: version.Name, SourceType: version.SourceType, Description: version.Description, Sensitive: version.Sensitive, CreatedAt: version.CreatedAt})
+	}
+	return result
+}
+
+func (r *Registry) ListVersions(workspaceID, toolID string) ([]Version, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]Version, 0)
+	for _, version := range r.versions {
+		if version.WorkspaceID == workspaceID && version.ToolID == toolID {
+			version.InputSchema = append([]byte(nil), version.InputSchema...)
+			result = append(result, version)
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("tool %s not found", toolID)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Version > result[j].Version })
+	return result, nil
+}
+
+func (r *Registry) PublishVersion(workspaceID, toolID, versionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	version, ok := r.versions[versionID]
+	if !ok || version.WorkspaceID != workspaceID || version.ToolID != toolID {
+		return fmt.Errorf("tool version not found")
+	}
+	version.Published = true
+	r.versions[versionID] = version
+	return nil
 }
 
 type Registry struct {
@@ -85,6 +145,16 @@ func (r *Registry) Register(_ context.Context, version Version) error {
 	}
 	if strings.TrimSpace(version.ToolID) == "" {
 		version.ToolID = version.ID
+	}
+	if version.Version <= 0 {
+		version.Version = 1
+	}
+	if version.EndpointConfig == "" && version.Endpoint != "" {
+		raw, _ := json.Marshal(map[string]string{"url": version.Endpoint})
+		version.EndpointConfig = string(raw)
+	}
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = time.Now().UTC()
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(version.InputSchema, &schema); err != nil || schema["type"] != "object" {

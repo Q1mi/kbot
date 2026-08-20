@@ -274,7 +274,7 @@ export function ConversationsPage() {
 
   function handleStreamEvent(event: AgentStreamEvent, assistantTurnId: string, userTurnId: string) {
     switch (event.type) {
-      case 'started': {
+      case 'run_started': {
         const started = event.data as RunStarted
         setConversationId(started.conversation_id)
         setPinnedVersionId(started.agent_version_id)
@@ -297,16 +297,16 @@ export function ConversationsPage() {
             : [...current, { kind: 'turn', id: assistantTurnId, role: 'assistant', content: event.text ?? '' }]
         })
         break
-      case 'tool_call':
+      case 'tool_started':
         addRuntimeEvent(event.type, `调用工具 ${event.text ?? ''}`)
         break
-      case 'tool_result':
+      case 'tool_finished':
         addRuntimeEvent(event.type, `工具 ${String(event.data ?? '')} 已返回`)
         break
       case 'skill_trigger':
         addRuntimeEvent(event.type, `触发技能 ${event.text ?? ''}`)
         break
-      case 'await_approval':
+      case 'approval_requested':
         addRuntimeEvent(event.type, `等待审批 ${event.text?.slice(0, 8) ?? ''}`)
         break
       case 'a2ui': {
@@ -320,9 +320,11 @@ export function ConversationsPage() {
         }
         break
       }
-      case 'error':
-        throw new Error(event.text || 'Agent 执行失败')
-      case 'done': {
+      case 'error': {
+		const detail = event.data as { message?: string } | undefined
+        throw new Error(event.text || detail?.message || 'Agent 执行失败')
+	  }
+      case 'run_finished': {
         const finished = event.data as RunFinished | undefined
         addRuntimeEvent(
           event.type,

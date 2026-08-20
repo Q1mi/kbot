@@ -12,7 +12,10 @@ CREATE UNIQUE INDEX users_email_lower_uidx ON users (lower(email));
 CREATE TABLE workspaces (
     id text PRIMARY KEY,
     name text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
+    description text NOT NULL DEFAULT '',
+    parent_id text REFERENCES workspaces(id),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE workspace_memberships (

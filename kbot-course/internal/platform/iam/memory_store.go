@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 
@@ -119,4 +120,16 @@ func (s *MemoryStore) GetUser(_ context.Context, id string) (*domain.User, error
 	}
 	clone := *user
 	return &clone, nil
+}
+
+func (s *MemoryStore) ListUsers(_ context.Context) ([]*domain.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]*domain.User, 0, len(s.byID))
+	for _, user := range s.byID {
+		clone := *user
+		result = append(result, &clone)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
 }

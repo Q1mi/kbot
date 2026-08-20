@@ -36,4 +36,9 @@ func TestSyncRunsExplicitIngestStagesAndKeepsDocumentID(t *testing.T) {
 	if len(first) != 1 || len(second) != 1 || first[0].ID != second[0].ID {
 		t.Fatalf("incremental sync changed unchanged document: %#v %#v", first, second)
 	}
+	jobs, _ := service.Jobs(t.Context(), "ws-1", base.ID)
+	connectors, _ := service.Connectors(t.Context(), "ws-1", base.ID)
+	if len(jobs) != 2 || len(connectors) != 1 || connectors[0].ConnectorKind != "markdown_folder" {
+		t.Fatalf("jobs=%+v connectors=%+v", jobs, connectors)
+	}
 }

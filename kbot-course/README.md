@@ -63,6 +63,14 @@ make test
 make run
 ```
 
+全量验收：
+
+```bash
+make verify
+```
+
+课程标签与每课核心增量见 [docs/course-map.md](docs/course-map.md)，完整本地环境见 [deploy/README.md](deploy/README.md)。
+
 ## Admin Console
 
 `web/admin` 从第 04 课开始直接提供最终 React Admin 源码。前端用于调用 API、查看会话、审批、评测和 Trace，课程现场编码聚焦 Go Agent 后端。

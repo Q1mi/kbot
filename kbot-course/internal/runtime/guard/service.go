@@ -27,10 +27,7 @@ type Service struct {
 	rules    map[string]RuleConfig
 	quotas   map[string]map[string]*Quota
 	sequence atomic.Uint64
-}
-
-func NewService(defaults *Pipeline) *Service {
-	return &Service{defaults: defaults, rules: make(map[string]RuleConfig), quotas: make(map[string]map[string]*Quota)}
+	logs     map[string][]InjectionLog
 }
 
 type Quota struct {
@@ -38,6 +35,19 @@ type Quota struct {
 	Period string `json:"period"`
 	Used   int64  `json:"used"`
 	Limit  int64  `json:"limit"`
+}
+
+type InjectionLog struct {
+	ID         string    `json:"id"`
+	Actor      string    `json:"actor"`
+	Action     string    `json:"action"`
+	ResourceID string    `json:"resource_id"`
+	AfterJSON  string    `json:"after_json"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func NewService(defaults *Pipeline) *Service {
+	return &Service{defaults: defaults, rules: make(map[string]RuleConfig), quotas: make(map[string]map[string]*Quota), logs: make(map[string][]InjectionLog)}
 }
 
 func (s *Service) Evaluate(ctx context.Context, workspaceID, hook, text string) (Decision, error) {
@@ -55,6 +65,9 @@ func (s *Service) Evaluate(ctx context.Context, workspaceID, hook, text string) 
 		var err error
 		decision, err = s.defaults.Evaluate(ctx, text)
 		if err != nil || !decision.Allowed {
+			if !decision.Allowed {
+				s.record(workspaceID, hook, decision.Reasons)
+			}
 			return decision, err
 		}
 	}
@@ -74,6 +87,7 @@ func (s *Service) Evaluate(ctx context.Context, workspaceID, hook, text string) 
 		switch rule.Action {
 		case "block":
 			decision.Allowed = false
+			s.record(workspaceID, hook, decision.Reasons)
 			return decision, nil
 		case "redact":
 			decision.SanitizedText = replaceAllFold(decision.SanitizedText, rule.PatternOrModel, "[REDACTED]")
@@ -90,6 +104,19 @@ func replaceAllFold(text, pattern, replacement string) string {
 		return text
 	}
 	return regexp.MustCompile(`(?i)`+regexp.QuoteMeta(pattern)).ReplaceAllString(text, replacement)
+}
+
+func (s *Service) InjectionLogs(workspaceID string) []InjectionLog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]InjectionLog(nil), s.logs[workspaceID]...)
+}
+
+func (s *Service) record(workspaceID, hook string, reasons []string) {
+	log := InjectionLog{ID: fmt.Sprintf("guard-log-%d", s.sequence.Add(1)), Actor: "runtime", Action: "guard.block", ResourceID: workspaceID, AfterJSON: strings.Join(reasons, ","), CreatedAt: time.Now().UTC()}
+	s.mu.Lock()
+	s.logs[workspaceID] = append(s.logs[workspaceID], log)
+	s.mu.Unlock()
 }
 
 func (s *Service) Create(_ context.Context, workspaceID string, rule RuleConfig) (RuleConfig, error) {

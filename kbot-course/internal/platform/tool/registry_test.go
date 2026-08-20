@@ -65,3 +65,24 @@ func TestRegistryKeepsToolNameUniqueAndCredentialsSecret(t *testing.T) {
 		t.Fatalf("runtime credentials were not restored: %#v, %v", resolved, err)
 	}
 }
+
+func TestRegistryGroupsToolVersionsAndPublishesDraft(t *testing.T) {
+	registry := NewRegistry()
+	base := Version{ID: "search-v1", ToolID: "search", Version: 1, WorkspaceID: "ws", Name: "search", InputSchema: []byte(`{"type":"object"}`), Published: true}
+	draft := Version{ID: "search-v2", ToolID: "search", Version: 2, WorkspaceID: "ws", Name: "search", InputSchema: []byte(`{"type":"object"}`)}
+	_ = registry.Register(t.Context(), base)
+	_ = registry.Register(t.Context(), draft)
+	if tools := registry.ListTools("ws"); len(tools) != 1 {
+		t.Fatalf("tools=%+v", tools)
+	}
+	versions, _ := registry.ListVersions("ws", "search")
+	if len(versions) != 2 || versions[0].ID != "search-v2" {
+		t.Fatalf("versions=%+v", versions)
+	}
+	if err := registry.PublishVersion("ws", "search", "search-v2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Resolve(t.Context(), "ws", "search-v2"); err != nil {
+		t.Fatal(err)
+	}
+}

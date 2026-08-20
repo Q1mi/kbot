@@ -3,6 +3,7 @@ package kb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,13 +22,15 @@ type KnowledgeBase struct {
 }
 
 type Document struct {
-	ID        string   `json:"id"`
-	KBID      string   `json:"kb_id"`
-	SourceURI string   `json:"source_uri"`
-	Title     string   `json:"title"`
-	Content   string   `json:"content"`
-	Checksum  string   `json:"checksum"`
-	Chunks    []string `json:"chunks"`
+	ID         string   `json:"id"`
+	KBID       string   `json:"kb_id"`
+	SourceType string   `json:"source_type"`
+	SourceURI  string   `json:"source_uri"`
+	Title      string   `json:"title"`
+	Content    string   `json:"content"`
+	Checksum   string   `json:"hash"`
+	Status     string   `json:"status"`
+	Chunks     []string `json:"chunks"`
 }
 
 type IngestJob struct {
@@ -45,14 +48,25 @@ type IngestJob struct {
 }
 
 type Service struct {
-	mu        sync.RWMutex
-	bases     map[string]KnowledgeBase
-	documents map[string]map[string]Document
-	sequence  atomic.Uint64
+	mu         sync.RWMutex
+	bases      map[string]KnowledgeBase
+	documents  map[string]map[string]Document
+	sequence   atomic.Uint64
+	jobs       map[string][]IngestJob
+	connectors map[string]ConnectorInstance
+}
+
+type ConnectorInstance struct {
+	ID, KBID, ConnectorKind, ConfigJSON, Cursor string
+	CreatedAt                                   time.Time
+}
+
+func (c ConnectorInstance) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"id": c.ID, "kb_id": c.KBID, "connector_kind": c.ConnectorKind, "config_json": c.ConfigJSON, "cursor": c.Cursor, "created_at": c.CreatedAt})
 }
 
 func NewService() *Service {
-	return &Service{bases: make(map[string]KnowledgeBase), documents: make(map[string]map[string]Document)}
+	return &Service{bases: make(map[string]KnowledgeBase), documents: make(map[string]map[string]Document), jobs: make(map[string][]IngestJob), connectors: make(map[string]ConnectorInstance)}
 }
 
 func (s *Service) Create(_ context.Context, workspaceID, name string) (*KnowledgeBase, error) {
@@ -81,6 +95,7 @@ func (s *Service) List(_ context.Context, workspaceID string) []KnowledgeBase {
 
 func (s *Service) Sync(ctx context.Context, workspaceID, kbID string, source connector.Connector) (*IngestJob, error) {
 	job := &IngestJob{ID: s.nextID("ingest"), KBID: kbID, Stage: "parse", Status: "running", CreatedAt: time.Now().UTC()}
+	defer func() { s.recordJob(*job) }()
 	if source == nil {
 		return s.fail(job, "parse", fmt.Errorf("connector is required"))
 	}
@@ -103,7 +118,7 @@ func (s *Service) Sync(ctx context.Context, workspaceID, kbID string, source con
 		if len(chunks) == 0 {
 			return s.fail(job, "chunk", fmt.Errorf("document %s has no indexable content", document.SourceURI))
 		}
-		indexed[document.SourceURI] = Document{ID: s.nextID("doc"), KBID: kbID, SourceURI: document.SourceURI, Title: document.Title, Content: document.Content, Checksum: document.Checksum, Chunks: chunks}
+		indexed[document.SourceURI] = Document{ID: s.nextID("doc"), KBID: kbID, SourceType: "markdown", SourceURI: document.SourceURI, Title: document.Title, Content: document.Content, Checksum: document.Checksum, Status: "ready", Chunks: chunks}
 	}
 	job.Stages = append(job.Stages, "chunk")
 	job.Stage = "embed"
@@ -124,7 +139,38 @@ func (s *Service) Sync(ctx context.Context, workspaceID, kbID string, source con
 	now := time.Now().UTC()
 	job.Stage, job.Status, job.FinishedAt = "done", "succeeded", &now
 	job.Stages = append(job.Stages, "done")
+	s.mu.Lock()
+	s.connectors[kbID] = ConnectorInstance{ID: "connector-" + kbID, KBID: kbID, ConnectorKind: "markdown_folder", ConfigJSON: `{}`, Cursor: now.Format(time.RFC3339Nano), CreatedAt: job.CreatedAt}
+	s.mu.Unlock()
 	return job, nil
+}
+
+func (s *Service) Jobs(_ context.Context, workspaceID, kbID string) ([]IngestJob, error) {
+	if err := s.ensureWorkspace(workspaceID, kbID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]IngestJob(nil), s.jobs[kbID]...), nil
+}
+
+func (s *Service) Connectors(_ context.Context, workspaceID, kbID string) ([]ConnectorInstance, error) {
+	if err := s.ensureWorkspace(workspaceID, kbID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.connectors[kbID]
+	if !ok {
+		return []ConnectorInstance{}, nil
+	}
+	return []ConnectorInstance{item}, nil
+}
+
+func (s *Service) recordJob(job IngestJob) {
+	s.mu.Lock()
+	s.jobs[job.KBID] = append(s.jobs[job.KBID], job)
+	s.mu.Unlock()
 }
 
 func (s *Service) Documents(_ context.Context, workspaceID, kbID string) ([]Document, error) {

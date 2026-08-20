@@ -41,10 +41,15 @@ type Request struct {
 	FencingToken  uint64    `json:"fencing_token,omitempty"`
 	Attempts      int       `json:"attempts,omitempty"`
 	LastError     string    `json:"last_error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 	argumentsHash [32]byte
 }
 
-func (s *Service) List(_ context.Context, workspaceID string) []Request {
+func (s *Service) List(ctx context.Context, workspaceID string) []Request {
+	if s.pool != nil {
+		result, _ := s.listPostgres(ctx, workspaceID)
+		return result
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := make([]Request, 0)
@@ -94,6 +99,7 @@ func (s *Service) Create(ctx context.Context, request Request) (*Request, error)
 	}
 	request.ID = fmt.Sprintf("approval-%d", s.sequence.Add(1))
 	request.Status = StatusPending
+	request.CreatedAt = s.now().UTC()
 	request.Arguments = canonical
 	request.Checkpoint = append([]byte(nil), request.Checkpoint...)
 	request.argumentsHash = sha256.Sum256(canonical)

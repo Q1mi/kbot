@@ -29,6 +29,23 @@ func (s *PostgresStore) GetUser(ctx context.Context, id string) (*domain.User, e
 	return s.scanUser(s.pool.QueryRow(ctx, `SELECT id,email,password_hash,name,created_at FROM users WHERE id=$1`, id))
 }
 
+func (s *PostgresStore) ListUsers(ctx context.Context) ([]*domain.User, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,email,password_hash,name,created_at FROM users ORDER BY created_at,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := make([]*domain.User, 0)
+	for rows.Next() {
+		var user domain.User
+		if err := rows.Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+	return users, rows.Err()
+}
+
 type userRow interface{ Scan(...any) error }
 
 func (s *PostgresStore) scanUser(row userRow) (*domain.User, error) {
@@ -43,7 +60,8 @@ func (s *PostgresStore) scanUser(row userRow) (*domain.User, error) {
 }
 
 func (s *PostgresStore) CreateWorkspace(ctx context.Context, workspace *domain.Workspace) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO workspaces (id,name,created_at) VALUES ($1,$2,$3)`, workspace.ID, workspace.Name, workspace.CreatedAt)
+	_, err := s.pool.Exec(ctx, `INSERT INTO workspaces (id,name,description,parent_id,created_at,updated_at) VALUES ($1,$2,$3,NULLIF($4,''),$5,$6)`,
+		workspace.ID, workspace.Name, workspace.Description, workspace.ParentID, workspace.CreatedAt, workspace.UpdatedAt)
 	return err
 }
 
@@ -71,7 +89,7 @@ func (s *PostgresStore) GetMembership(ctx context.Context, userID, workspaceID s
 }
 
 func (s *PostgresStore) ListUserWorkspaces(ctx context.Context, userID string) ([]*domain.Workspace, error) {
-	rows, err := s.pool.Query(ctx, `SELECT w.id,w.name,w.created_at FROM workspaces w
+	rows, err := s.pool.Query(ctx, `SELECT w.id,w.name,w.description,COALESCE(w.parent_id,''),w.created_at,w.updated_at FROM workspaces w
 		JOIN workspace_memberships m ON m.workspace_id=w.id WHERE m.user_id=$1 ORDER BY w.created_at,w.id`, userID)
 	if err != nil {
 		return nil, err
@@ -80,7 +98,7 @@ func (s *PostgresStore) ListUserWorkspaces(ctx context.Context, userID string) (
 	result := make([]*domain.Workspace, 0)
 	for rows.Next() {
 		workspace := new(domain.Workspace)
-		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.CreatedAt); err != nil {
+		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Description, &workspace.ParentID, &workspace.CreatedAt, &workspace.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, workspace)

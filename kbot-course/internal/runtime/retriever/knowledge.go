@@ -220,7 +220,7 @@ func tokenize(value string) []string {
 			word = word[:0]
 		}
 	}
-	for _, current := range []rune(value) {
+	for _, current := range value {
 		if unicode.Is(unicode.Han, current) {
 			flushWord()
 			terms = append(terms, string(current))

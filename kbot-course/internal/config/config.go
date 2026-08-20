@@ -24,6 +24,10 @@ type Config struct {
 	ChannelWorkspaceID string
 	ChannelAgentID     string
 	ChannelAgentEnv    string
+	BootstrapEmail     string
+	BootstrapPassword  string
+	BootstrapName      string
+	ToolAllowedHosts   []string
 }
 
 func Load() Config {
@@ -43,6 +47,10 @@ func Load() Config {
 		ChannelWorkspaceID: os.Getenv("KBOT_CHANNEL_WORKSPACE_ID"),
 		ChannelAgentID:     os.Getenv("KBOT_CHANNEL_AGENT_ID"),
 		ChannelAgentEnv:    valueOrDefault("KBOT_CHANNEL_AGENT_ENV", "prod"),
+		BootstrapEmail:     os.Getenv("KBOT_BOOTSTRAP_EMAIL"),
+		BootstrapPassword:  os.Getenv("KBOT_BOOTSTRAP_PASSWORD"),
+		BootstrapName:      valueOrDefault("KBOT_BOOTSTRAP_NAME", "Course Admin"),
+		ToolAllowedHosts:   csvOrDefault("KBOT_TOOL_ALLOWED_HOSTS", []string{"crossborder-sim", "insurance-sim", "localhost", "127.0.0.1"}),
 	}
 }
 
@@ -74,6 +82,9 @@ func (c Config) Validate() error {
 	if (c.WebhookSecret != "" || c.LarkEncryptKey != "") && (strings.TrimSpace(c.ChannelWorkspaceID) == "" || strings.TrimSpace(c.ChannelAgentID) == "") {
 		return fmt.Errorf("enabled channels require KBOT_CHANNEL_WORKSPACE_ID and KBOT_CHANNEL_AGENT_ID")
 	}
+	if c.BootstrapEmail != "" && len(c.BootstrapPassword) < 8 {
+		return fmt.Errorf("KBOT_BOOTSTRAP_PASSWORD must contain at least 8 characters when bootstrap is enabled")
+	}
 	return nil
 }
 
@@ -100,4 +111,19 @@ func durationOrDefault(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func csvOrDefault(key string, fallback []string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return append([]string(nil), fallback...)
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
