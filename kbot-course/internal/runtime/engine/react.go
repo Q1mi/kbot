@@ -103,7 +103,7 @@ func (r *ADKRunner) WithAudit(sink AuditSink, actorID string) *ADKRunner {
 }
 
 type AwaitingApprovalError struct {
-	ApprovalID, ToolName, ToolCallID, ToolVersionID string
+	ApprovalID, ConversationID, ToolName, ToolCallID, ToolVersionID string
 }
 
 func (e *AwaitingApprovalError) Error() string {

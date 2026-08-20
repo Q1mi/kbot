@@ -1,3 +1,7 @@
+DROP TABLE IF EXISTS team_promotions;
+DROP TABLE IF EXISTS team_versions;
+DROP TABLE IF EXISTS teams;
+DROP TABLE IF EXISTS integration_replays;
 DROP TABLE IF EXISTS eval_runs;
 DROP TABLE IF EXISTS eval_cases;
 DROP TABLE IF EXISTS eval_datasets;

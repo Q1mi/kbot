@@ -286,6 +286,24 @@ func (s *Service) ConversationDetail(ctx context.Context, workspaceID, userID, c
 	return conversation, messages, err
 }
 
+// ResolveVersion pins an Agent environment to the immutable version currently
+// promoted there. Team snapshots call this at publish time.
+func (s *Service) ResolveVersion(ctx context.Context, workspaceID, agentID, environment string) (string, error) {
+	if environment == "" {
+		environment = "dev"
+	}
+	if s.postgres != nil {
+		return s.postgres.resolveVersion(ctx, workspaceID, agentID, environment)
+	}
+	s.mu.RLock()
+	versionID, ok := s.promotions[promotionKey(workspaceID, agentID, environment)]
+	s.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("agent %s has no version promoted to %s", agentID, environment)
+	}
+	return versionID, nil
+}
+
 func promotionKey(workspaceID, agentID, environment string) string {
 	return workspaceID + ":" + agentID + ":" + environment
 }

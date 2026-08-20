@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/iam"
+	platformteam "github.com/Q1mi/kbot/internal/platform/team"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 )
@@ -59,6 +63,29 @@ func (completeChatRuntime) ChatStream(_ context.Context, req engine.ChatRequest,
 		return err
 	}
 	return emit(engine.Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
+}
+
+func TestTeamMemberEventCollectorReturnsApprovalPause(t *testing.T) {
+	collector := teamMemberEventCollector{conversationID: "conversation-1"}
+	if err := collector.consume(engine.Event{Type: "approval_requested", Data: map[string]string{
+		"approval_id": "approval-1", "tool_name": "refund", "tool_call_id": "call-1", "tool_version_id": "refund-v1",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.consume(engine.Event{Type: "run_finished", Data: map[string]string{
+		"status": "awaiting_approval",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := collector.result(nil)
+	var approvalErr *engine.AwaitingApprovalError
+	if !errors.As(err, &approvalErr) {
+		t.Fatalf("expected AwaitingApprovalError, got %T: %v", err, err)
+	}
+	if approvalErr.ApprovalID != "approval-1" || approvalErr.ConversationID != "conversation-1" ||
+		approvalErr.ToolName != "refund" || approvalErr.ToolCallID != "call-1" || approvalErr.ToolVersionID != "refund-v1" {
+		t.Fatalf("unexpected approval error: %+v", approvalErr)
+	}
 }
 
 func TestFirstChatCreatesPinnedConversation(t *testing.T) {
@@ -152,5 +179,66 @@ func TestProtectedWorkspaceRejectsUnrelatedHeader(t *testing.T) {
 	NewRouter(service).ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
+func TestTeamAPIPinsVersionsAndRunsPipeline(t *testing.T) {
+	t.Parallel()
+	iamService := iam.New(iam.NewMemoryStore(), "0123456789abcdef0123456789abcdef", "kbot-test")
+	user, err := iamService.Register(t.Context(), "team@example.com", "password123", "Team Student")
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, _ := iamService.Login(t.Context(), user.Email, "password123")
+	workspaces, _ := iamService.ListUserWorkspaces(t.Context(), user.ID)
+	workspaceID := workspaces[0].ID
+	agents := agent.NewService()
+	for index, name := range []string{"writer", "reviewer"} {
+		item, createErr := agents.CreateAgent(t.Context(), workspaceID, name, "blank")
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		versionID := name + "-v1"
+		version := domain.AgentVersion{ID: versionID, AgentID: item.ID, WorkspaceID: workspaceID, Version: 1, CreatedAt: time.Now().UTC()}
+		snapshot := engine.AgentSnapshot{ID: versionID, AgentID: item.ID, WorkspaceID: workspaceID, SystemPrompt: name, MaxSteps: index + 2}
+		if err := agents.Publish(t.Context(), version, snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if err := agents.Promote(t.Context(), workspaceID, item.ID, "dev", versionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := agents.ListAgents(t.Context(), workspaceID)
+	teams := platformteam.NewService(agents)
+	router := NewRouterWithControlPlane(iamService, completeChatRuntime{}, ControlPlane{Agents: agents, Teams: teams})
+	body := fmt.Sprintf(`{"name":"content","mode":"pipeline","members":[{"agent_id":%q,"role":"write"},{"agent_id":%q,"role":"review"}]}`, items[0].ID, items[1].ID)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/teams", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+login.Token)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create team status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		Team struct {
+			ID string `json:"id"`
+		} `json:"team"`
+		Version platformteam.Version `json:"version"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Version.Members) != 2 || created.Version.Members[0].AgentVersionID == "" {
+		t.Fatalf("version=%+v", created.Version)
+	}
+	runBody := fmt.Sprintf(`{"team_id":%q,"env":"dev","input":"draft"}`, created.Team.ID)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/teams/runs", strings.NewReader(runBody))
+	request.Header.Set("Authorization", "Bearer "+login.Token)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"final":"course reply"`) || !strings.Contains(response.Body.String(), `"steps"`) {
+		t.Fatalf("run team status=%d body=%s", response.Code, response.Body.String())
 	}
 }

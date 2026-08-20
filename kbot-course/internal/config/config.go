@@ -19,6 +19,11 @@ type Config struct {
 	SandboxRunnerURL   string
 	SandboxRunnerToken string
 	DatabaseURL        string
+	WebhookSecret      string
+	LarkEncryptKey     string
+	ChannelWorkspaceID string
+	ChannelAgentID     string
+	ChannelAgentEnv    string
 }
 
 func Load() Config {
@@ -33,6 +38,11 @@ func Load() Config {
 		SandboxRunnerURL:   valueOrDefault("KBOT_SANDBOX_RUNNER_URL", "http://127.0.0.1:8081"),
 		SandboxRunnerToken: os.Getenv("KBOT_SANDBOX_RUNNER_TOKEN"),
 		DatabaseURL:        valueOrDefault("KBOT_DATABASE_URL", "postgres://kbot:kbot@127.0.0.1:5432/kbot?sslmode=disable"),
+		WebhookSecret:      os.Getenv("KBOT_WEBHOOK_SECRET"),
+		LarkEncryptKey:     os.Getenv("KBOT_LARK_ENCRYPT_KEY"),
+		ChannelWorkspaceID: os.Getenv("KBOT_CHANNEL_WORKSPACE_ID"),
+		ChannelAgentID:     os.Getenv("KBOT_CHANNEL_AGENT_ID"),
+		ChannelAgentEnv:    valueOrDefault("KBOT_CHANNEL_AGENT_ENV", "prod"),
 	}
 }
 
@@ -60,6 +70,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.SandboxRunnerToken) < 32 {
 		return fmt.Errorf("KBOT_SANDBOX_RUNNER_TOKEN must contain at least 32 characters")
+	}
+	if (c.WebhookSecret != "" || c.LarkEncryptKey != "") && (strings.TrimSpace(c.ChannelWorkspaceID) == "" || strings.TrimSpace(c.ChannelAgentID) == "") {
+		return fmt.Errorf("enabled channels require KBOT_CHANNEL_WORKSPACE_ID and KBOT_CHANNEL_AGENT_ID")
 	}
 	return nil
 }

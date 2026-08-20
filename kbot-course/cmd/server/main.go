@@ -14,6 +14,10 @@ import (
 	"github.com/Q1mi/kbot/internal/config"
 	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	postgresinfra "github.com/Q1mi/kbot/internal/infrastructure/postgres"
+	"github.com/Q1mi/kbot/internal/integration"
+	"github.com/Q1mi/kbot/internal/integration/lark"
+	"github.com/Q1mi/kbot/internal/integration/replay"
+	"github.com/Q1mi/kbot/internal/integration/webhook"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
@@ -23,6 +27,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
 	"github.com/Q1mi/kbot/internal/platform/skill"
+	platformteam "github.com/Q1mi/kbot/internal/platform/team"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
@@ -61,6 +66,7 @@ func main() {
 		log.Fatalf("create LLM gateway: %v", err)
 	}
 	agents := agent.NewPostgresService(pool)
+	teams := platformteam.NewPostgresService(agents, pool)
 	runtime := engine.New(agents, gateway)
 	toolRegistry := platformtool.NewRegistry()
 	knowledgeBases := kb.NewService()
@@ -96,15 +102,24 @@ func main() {
 	})
 	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals).WithGuard(guards).WithAudit(auditLedger)
 	approvalWorker := engine.NewApprovalWorker(approvals, runtime, "course-server-worker")
+	replayGuard := replay.NewPostgres(pool, replay.DefaultWindow)
+	channelConsumer := integration.NewRuntimeConsumer(agents, runtime, cfg.ChannelWorkspaceID, cfg.ChannelAgentID, cfg.ChannelAgentEnv, func(source, eventID, answer string) {
+		log.Printf("channel answer source=%s event_id=%s answer=%q", source, eventID, answer)
+	})
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
 			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
 			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards,
-			Evaluator: evaluator, EvalData: evalData, ApprovalWorker: approvalWorker,
+			Evaluator: evaluator, EvalData: evalData, Teams: teams,
+			Webhook:        webhook.NewHandlerWithReplay(cfg.WebhookSecret, replayGuard, channelConsumer.Callback("webhook")),
+			Lark:           lark.NewHandlerWithReplay(cfg.LarkEncryptKey, replayGuard, channelConsumer.Callback("lark")),
+			ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(

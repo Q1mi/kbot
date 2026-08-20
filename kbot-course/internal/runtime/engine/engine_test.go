@@ -37,6 +37,22 @@ type fakePlatform struct {
 	requestedVersion string
 }
 
+func (p *fakePlatform) CreateConversationForVersion(
+	_ context.Context, workspaceID, agentID, versionID, userID string,
+) (*domain.Conversation, error) {
+	snapshot, ok := p.snapshots[versionID]
+	if !ok || (snapshot.WorkspaceID != "" && snapshot.WorkspaceID != workspaceID) ||
+		(snapshot.AgentID != "" && snapshot.AgentID != agentID) {
+		return nil, fmt.Errorf("snapshot %s not found", versionID)
+	}
+	conversation := &domain.Conversation{
+		ID: versionID + "-conversation", WorkspaceID: workspaceID, AgentID: agentID,
+		AgentVersionID: versionID, UserID: userID,
+	}
+	p.conversation = conversation
+	return conversation, nil
+}
+
 func (p *fakePlatform) LoadConversation(
 	context.Context,
 	string,

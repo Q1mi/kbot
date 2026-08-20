@@ -23,6 +23,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
 	"github.com/Q1mi/kbot/internal/platform/skill"
+	platformteam "github.com/Q1mi/kbot/internal/platform/team"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
@@ -42,6 +43,9 @@ type ControlPlane struct {
 	Guard          *guard.Service
 	Evaluator      *platformeval.Service
 	EvalData       *platformeval.Catalog
+	Teams          *platformteam.Service
+	Webhook        http.Handler
+	Lark           http.Handler
 	ApprovalWorker interface{ Wake() }
 }
 
@@ -114,6 +118,12 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	if control.Webhook != nil {
+		router.Method(http.MethodPost, "/api/v1/integrations/webhook", control.Webhook)
+	}
+	if control.Lark != nil {
+		router.Method(http.MethodPost, "/api/v1/integrations/lark/events", control.Lark)
+	}
 	router.Post("/api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Email, Password, Name string }
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
@@ -157,6 +167,7 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				"role":         middleware.WorkspaceRole(r.Context()),
 			})
 		})
+		registerTeamRoutes(protected, iamService, runtime, control)
 		if control.Agents != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, control.Agents.ListAgents(r.Context(), middleware.WorkspaceID(r.Context())))
@@ -303,6 +314,7 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				var endpoint struct {
 					URL     string `json:"url"`
 					SDKName string `json:"sdk_name"`
+					CardURL string `json:"card_url"`
 				}
 				if err := json.Unmarshal([]byte(req.EndpointConfig), &endpoint); err != nil {
 					http.Error(w, "invalid endpoint_config", http.StatusBadRequest)
@@ -312,6 +324,8 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				executableEndpoint := endpoint.URL
 				if req.SourceType == "internal_sdk" {
 					executableEndpoint = endpoint.SDKName
+				} else if req.SourceType == "a2a" {
+					executableEndpoint = endpoint.CardURL
 				}
 				version := platformtool.Version{
 					ID: versionID, ToolID: versionID,
