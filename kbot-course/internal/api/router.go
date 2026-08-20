@@ -13,11 +13,13 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
+	"github.com/Q1mi/kbot/internal/runtime/retriever"
 )
 
 type ControlPlane struct {
-	Tools *platformtool.Registry
-	KBs   *kb.Service
+	Tools  *platformtool.Registry
+	KBs    *kb.Service
+	Search *retriever.KnowledgeSearch
 }
 
 func NewRouter(iamService *iam.Service, runtimes ...ChatRuntime) http.Handler {
@@ -93,18 +95,23 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					return
 				}
 				var endpoint struct {
-					URL string `json:"url"`
+					URL     string `json:"url"`
+					SDKName string `json:"sdk_name"`
 				}
 				if err := json.Unmarshal([]byte(req.EndpointConfig), &endpoint); err != nil {
 					http.Error(w, "invalid endpoint_config", http.StatusBadRequest)
 					return
 				}
 				versionID := fmt.Sprintf("tool-version-%d", time.Now().UnixNano())
+				executableEndpoint := endpoint.URL
+				if req.SourceType == "internal_sdk" {
+					executableEndpoint = endpoint.SDKName
+				}
 				version := platformtool.Version{
 					ID: versionID, ToolID: versionID,
 					WorkspaceID: middleware.WorkspaceID(r.Context()), Name: req.Name,
 					SourceType: req.SourceType, Description: req.Description,
-					InputSchema: []byte(req.SchemaJSON), Endpoint: endpoint.URL,
+					InputSchema: []byte(req.SchemaJSON), Endpoint: executableEndpoint,
 					AuthConfig: req.AuthConfig, HasAuth: req.AuthConfig != "",
 					Sensitive: req.Sensitive, Published: true, CreatedAt: time.Now().UTC(),
 				}
@@ -157,6 +164,28 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				}
 				writeJSON(w, http.StatusOK, documents)
 			})
+			if control.Search != nil {
+				protected.With(middleware.Workspace(iamService)).Post("/api/v1/kbs/{kbID}/search", func(w http.ResponseWriter, r *http.Request) {
+					var req struct {
+						Query string `json:"query"`
+						Mode  string `json:"mode"`
+						TopK  int    `json:"top_k"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						http.Error(w, "invalid JSON", http.StatusBadRequest)
+						return
+					}
+					if req.TopK == 0 {
+						req.TopK = 5
+					}
+					results, err := control.Search.Search(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "kbID"), req.Query, req.Mode, req.TopK)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, results)
+				})
+			}
 		}
 		if runtime != nil {
 			protected.With(middleware.Workspace(iamService)).Post("/stream/agents/{agentID}/chat", NewStreamHandler(runtime).ServeHTTP)

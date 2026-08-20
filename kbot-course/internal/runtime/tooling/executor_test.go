@@ -130,6 +130,29 @@ func TestExecutorAppliesNestedJSONSchemaConstraints(t *testing.T) {
 	}
 }
 
+func TestExecutorRunsRegisteredInternalSDKTool(t *testing.T) {
+	registry := platformtool.NewRegistry()
+	_ = registry.Register(context.Background(), platformtool.Version{
+		ID: "search-v1", WorkspaceID: "ws", Name: "search_knowledge_base",
+		SourceType: "internal_sdk", Endpoint: "search_knowledge_base", Published: true,
+		InputSchema: []byte(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+	})
+	executor := NewExecutor(registry, nil)
+	executor.RegisterSDK("search_knowledge_base", func(_ context.Context, workspaceID string, arguments map[string]any) (Result, error) {
+		if workspaceID != "ws" || arguments["query"] != "inventory" {
+			t.Fatalf("scope/arguments = %s %#v", workspaceID, arguments)
+		}
+		return Result{StatusCode: http.StatusOK, Body: []byte(`[{"id":"passage-1"}]`)}, nil
+	})
+	result, err := executor.Execute(t.Context(), Call{WorkspaceID: "ws", ToolVersionID: "search-v1", Arguments: []byte(`{"query":"inventory"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), "passage-1") {
+		t.Fatalf("result = %s", result.Body)
+	}
+}
+
 func TestExecutorRejectsMissingRequiredArgument(t *testing.T) {
 	registry := platformtool.NewRegistry()
 	_ = registry.Register(context.Background(), platformtool.Version{ID: "v1", WorkspaceID: "ws", Name: "tool", Endpoint: "http://example.com", Published: true, InputSchema: []byte(`{"type":"object","required":["id"]}`)})

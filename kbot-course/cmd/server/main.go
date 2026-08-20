@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
+	"github.com/Q1mi/kbot/internal/runtime/retriever"
 	"github.com/Q1mi/kbot/internal/runtime/sandbox"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
@@ -38,16 +40,34 @@ func main() {
 	runtime := engine.New(controlPlane, gateway)
 	toolRegistry := platformtool.NewRegistry()
 	knowledgeBases := kb.NewService()
+	knowledgeSearch := retriever.NewKnowledgeSearch(knowledgeBases)
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
 	}
 	toolExecutor := tooling.NewExecutor(toolRegistry, nil, "crossborder-sim", "localhost", "127.0.0.1").WithSandbox(sandboxClient)
+	toolExecutor.RegisterSDK("search_knowledge_base", func(ctx context.Context, workspaceID string, arguments map[string]any) (tooling.Result, error) {
+		kbID, _ := arguments["kb_id"].(string)
+		query, _ := arguments["query"].(string)
+		mode, _ := arguments["mode"].(string)
+		topK := 5
+		if number, ok := arguments["top_k"].(json.Number); ok {
+			if value, parseErr := number.Int64(); parseErr == nil {
+				topK = int(value)
+			}
+		}
+		results, searchErr := knowledgeSearch.Search(ctx, workspaceID, kbID, query, mode, topK)
+		if searchErr != nil {
+			return tooling.Result{}, searchErr
+		}
+		body, marshalErr := json.Marshal(results)
+		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
+	})
 	runtime.WithTools(toolExecutor)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{Tools: toolRegistry, KBs: knowledgeBases}),
+		Handler:           api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
