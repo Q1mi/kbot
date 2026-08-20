@@ -30,6 +30,7 @@ type AgentSnapshot struct {
 	ModelProfileVersionID string
 	ToolVersionIDs        []string
 	SkillVersionIDs       []string
+	KnowledgeVersionIDs   []string
 }
 
 type executionPlanner interface {
