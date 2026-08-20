@@ -1,13 +1,22 @@
 package service
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Q1mi/kbot-crossborder/internal/domain"
 )
 
-var ErrNotImplemented = errors.New("inventory transfer is not implemented")
+var (
+	ErrNotFound            = errors.New("business resource not found")
+	ErrInvalidTransition   = errors.New("invalid business state transition")
+	ErrInsufficientStock   = errors.New("insufficient inventory")
+	ErrIdempotencyKey      = errors.New("idempotency_key is required")
+	ErrIdempotencyConflict = errors.New("idempotency key was already used for a different request")
+)
 
 type TransferRequest struct {
 	SKU            string
@@ -23,7 +32,12 @@ type Service struct {
 	orders      map[string]domain.Order
 	inventory   map[string]domain.InventoryBalance
 	transfers   map[string]domain.InventoryTransfer
-	idempotency map[string]domain.InventoryTransfer
+	idempotency map[string]idempotencyRecord
+}
+
+type idempotencyRecord struct {
+	fingerprint [32]byte
+	transfer    domain.InventoryTransfer
 }
 
 func NewSeeded() *Service {
@@ -45,7 +59,7 @@ func NewSeeded() *Service {
 			},
 		},
 		transfers:   make(map[string]domain.InventoryTransfer),
-		idempotency: make(map[string]domain.InventoryTransfer),
+		idempotency: make(map[string]idempotencyRecord),
 	}
 }
 
@@ -68,8 +82,66 @@ func (s *Service) Inventory(sku string) []domain.InventoryBalance {
 	return result
 }
 
-func (s *Service) CreateTransfer(TransferRequest) (domain.InventoryTransfer, error) {
-	return domain.InventoryTransfer{}, ErrNotImplemented
+func (s *Service) CreateTransfer(req TransferRequest) (domain.InventoryTransfer, error) {
+	if req.IdempotencyKey == "" {
+		return domain.InventoryTransfer{}, ErrIdempotencyKey
+	}
+	if req.Quantity <= 0 || req.FromWarehouse == req.ToWarehouse {
+		return domain.InventoryTransfer{}, ErrInvalidTransition
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fingerprint := transferFingerprint(req)
+	if cached, ok := s.idempotency[req.IdempotencyKey]; ok {
+		if cached.fingerprint != fingerprint {
+			return domain.InventoryTransfer{}, ErrIdempotencyConflict
+		}
+		return cached.transfer, nil
+	}
+
+	fromKey := inventoryKey(req.FromWarehouse, req.SKU)
+	toKey := inventoryKey(req.ToWarehouse, req.SKU)
+	from, ok := s.inventory[fromKey]
+	if !ok {
+		return domain.InventoryTransfer{}, ErrNotFound
+	}
+	if from.Available < req.Quantity {
+		return domain.InventoryTransfer{}, ErrInsufficientStock
+	}
+
+	if req.DryRun {
+		transfer := domain.InventoryTransfer{
+			SKU: req.SKU, FromWarehouse: req.FromWarehouse,
+			ToWarehouse: req.ToWarehouse, Quantity: req.Quantity,
+			Status: "validated",
+		}
+		s.idempotency[req.IdempotencyKey] = idempotencyRecord{fingerprint: fingerprint, transfer: transfer}
+		return transfer, nil
+	}
+
+	to := s.inventory[toKey]
+	to.WarehouseID = req.ToWarehouse
+	to.SKU = req.SKU
+	from.Available -= req.Quantity
+	to.Available += req.Quantity
+	s.inventory[fromKey] = from
+	s.inventory[toKey] = to
+
+	transfer := domain.InventoryTransfer{
+		ID:  fmt.Sprintf("TR-%04d", len(s.transfers)+1),
+		SKU: req.SKU, FromWarehouse: req.FromWarehouse,
+		ToWarehouse: req.ToWarehouse, Quantity: req.Quantity,
+		Status: "created", CreatedAt: time.Now().UTC(),
+	}
+	s.transfers[transfer.ID] = transfer
+	s.idempotency[req.IdempotencyKey] = idempotencyRecord{fingerprint: fingerprint, transfer: transfer}
+	return transfer, nil
+}
+
+func transferFingerprint(req TransferRequest) [32]byte {
+	return sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%t", req.SKU, req.FromWarehouse, req.ToWarehouse, req.Quantity, req.DryRun)))
 }
 
 func inventoryKey(warehouse, sku string) string {
