@@ -52,3 +52,11 @@ Agent Version、环境指针、Conversation 和 Message 都由数据库存储；
 A2UI action 只执行带身份与 Workspace 校验的审批状态迁移；后台 Approval Worker 从
 PostgreSQL 扫描已批准任务，通过 lease + fencing token 抢占执行，成功后 CAS 完成，
 失败按上限重试。HTTP 请求生命周期不会承载 Tool 副作用。
+
+## OpenTelemetry 与审计
+
+配置 `OTEL_EXPORTER_OTLP_ENDPOINT` 或 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 后，
+Server 会安装带批量导出的 OpenTelemetry SDK。将 OTLP/HTTP 地址指向 Langfuse，并通过
+`OTEL_EXPORTER_OTLP_HEADERS` 提供认证信息。Agent Run 携带 Workspace、Agent Version、
+Conversation 和 User 稳定维度，模型与工具操作作为子 Span 输出；高风险操作同时写入
+按 Workspace 隔离的哈希链审计账本。

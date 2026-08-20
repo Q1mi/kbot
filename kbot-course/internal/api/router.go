@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,7 @@ import (
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -28,6 +30,7 @@ import (
 type ControlPlane struct {
 	Agents         *agent.Service
 	Approvals      *approval.Service
+	Audit          *audit.Ledger
 	Tools          *platformtool.Registry
 	KBs            *kb.Service
 	Search         *retriever.KnowledgeSearch
@@ -217,7 +220,7 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 						http.Error(w, err.Error(), http.StatusNotFound)
 						return
 					}
-					req.ConversationID, req.WorkspaceID = conversation.ID, workspaceID
+					req.ConversationID, req.WorkspaceID, req.UserID = conversation.ID, workspaceID, middleware.UserID(r.Context())
 					var content, status string
 					err = runtime.ChatStream(r.Context(), req, func(event engine.Event) error {
 						if event.Type == "answer_done" {
@@ -460,6 +463,13 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
 				}
+				if control.Audit != nil {
+					_, _ = control.Audit.Append(r.Context(), audit.Event{
+						WorkspaceID: workspaceID, ActorID: middleware.UserID(r.Context()),
+						Action: "approval." + strings.TrimPrefix(action.Action.Name, "approval."), ResourceID: approvalID,
+						Data: map[string]any{"conversation_id": conversationID, "tool_call_id": request.ToolCallID, "tool_version_id": request.ToolVersionID},
+					})
+				}
 				status := "rejected"
 				if approved {
 					status = "approved"
@@ -525,6 +535,38 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				writeJSON(w, http.StatusOK, quota)
 			})
 		}
+		if control.Audit != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/audit/logs", func(w http.ResponseWriter, r *http.Request) {
+				events, err := control.Audit.List(r.Context(), middleware.WorkspaceID(r.Context()))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				conversationID, actorID := r.URL.Query().Get("conversation_id"), r.URL.Query().Get("actor")
+				filtered := events[:0]
+				for _, event := range events {
+					if conversationID != "" && event.ResourceID != conversationID {
+						continue
+					}
+					if actorID != "" && event.ActorID != actorID {
+						continue
+					}
+					filtered = append(filtered, event)
+				}
+				writeJSON(w, http.StatusOK, filtered)
+			})
+		}
+		if control.Approvals != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/approvals", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Approvals.List(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+		}
+		protected.With(middleware.Workspace(iamService)).Get("/api/v1/observability", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"service": "kbot-course", "workspace_id": middleware.WorkspaceID(r.Context()),
+				"tracing": "opentelemetry", "session_key": "conversation_id",
+			})
+		})
 		if runtime != nil {
 			stream := NewStreamHandler(runtime)
 			if control.Agents != nil {

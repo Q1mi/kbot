@@ -47,6 +47,7 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.WorkspaceID = middleware.WorkspaceID(r.Context())
+	req.UserID = middleware.UserID(r.Context())
 	if h.conversations != nil {
 		conversation, err := h.conversations.ResolveConversation(
 			r.Context(), req.WorkspaceID, middleware.UserID(r.Context()), chi.URLParam(r, "agentID"),

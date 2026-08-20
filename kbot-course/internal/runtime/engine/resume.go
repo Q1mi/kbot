@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/Q1mi/kbot/internal/platform/approval"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
 )
@@ -47,6 +48,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 		return err
 	}
 	plan = e.guardExecutionPlan(plan, request.WorkspaceID)
+	plan = observeExecutionPlan(plan)
 	packages, err := e.resolveSkills(ctx, snapshot)
 	if err != nil {
 		return err
@@ -60,6 +62,12 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 		userInput = "/skill " + activeSkillName
 	}
 	skillRuntime, err := skillrunner.NewRuntime(ctx, packages, bindings, userInput, func(pkg platformskill.Package) error {
+		if e.audit != nil && request.DecidedBy != "" {
+			_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
+				WorkspaceID: request.WorkspaceID, ActorID: request.DecidedBy, Action: "skill.triggered",
+				ResourceID: pkg.Name, Data: map[string]any{"conversation_id": request.RunID, "resumed": true},
+			})
+		}
 		return emitContext(ctx, emit, Event{Type: "skill_trigger", Data: map[string]string{"name": pkg.Name, "resumed": "true"}})
 	})
 	if err != nil {
@@ -68,7 +76,8 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 	var authorize func(string, string) error
 	runner := NewADKRunner(plan.Model, e.tools, request.WorkspaceID).
 		WithModelPolicy(plan.Retry, plan.Failover).
-		WithApprovals(e.approvals, request.RunID)
+		WithApprovals(e.approvals, request.RunID).
+		WithAudit(e.audit, request.DecidedBy)
 	if skillRuntime != nil {
 		if err := skillRuntime.Restore(activeSkillName); err != nil {
 			return err

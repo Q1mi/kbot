@@ -47,6 +47,7 @@ type SandboxRunner interface {
 type Binding struct {
 	Name            string
 	VersionID       string
+	SourceType      string
 	Info            *schema.ToolInfo
 	RequiresNetwork bool
 	KBScoped        bool
@@ -249,6 +250,7 @@ func (e *Executor) Bind(ctx context.Context, workspaceID string, versionIDs []st
 		}
 		bindings = append(bindings, Binding{
 			Name: version.Name, VersionID: version.ID,
+			SourceType:      version.SourceType,
 			Info:            &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
 			RequiresNetwork: version.SourceType == "rest_api" || version.SourceType == "mcp_server" || version.SourceType == "a2a" || version.SourceType == "",
 			KBScoped:        version.SourceType == "internal_sdk" && version.Endpoint == "search_knowledge_base",

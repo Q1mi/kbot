@@ -12,9 +12,11 @@ import (
 
 	"github.com/Q1mi/kbot/internal/api"
 	"github.com/Q1mi/kbot/internal/config"
+	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	postgresinfra "github.com/Q1mi/kbot/internal/infrastructure/postgres"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -34,6 +36,17 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
+	shutdownTracing, err := courseotel.Setup(context.Background(), "kbot-course")
+	if err != nil {
+		log.Fatalf("configure tracing: %v", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Printf("shutdown tracing: %v", err)
+		}
+	}()
 	databaseContext, databaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	pool, err := postgresinfra.Open(databaseContext, cfg.DatabaseURL)
 	databaseCancel()
@@ -56,6 +69,7 @@ func main() {
 	skills := skill.NewService()
 	approvals := approval.NewPostgresService(pool)
 	guards := guard.NewService(guard.NewPipeline(guard.MaxLengthRule{MaxRunes: 8000}, guard.InjectionRule{}, guard.PIIRule{}))
+	auditLedger := audit.NewPostgresLedger(pool)
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -78,13 +92,13 @@ func main() {
 		body, marshalErr := json.Marshal(results)
 		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
 	})
-	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals).WithGuard(guards)
+	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals).WithGuard(guards).WithAudit(auditLedger)
 	approvalWorker := engine.NewApprovalWorker(approvals, runtime, "course-server-worker")
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
-			Agents: agents, Approvals: approvals, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
+			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
 			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards, ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

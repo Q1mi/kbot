@@ -10,7 +10,10 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"go.opentelemetry.io/otel/attribute"
 
+	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
@@ -20,6 +23,7 @@ type ChatRequest struct {
 	ConversationID   string `json:"conversation_id"`
 	Message          string `json:"message"`
 	WorkspaceID      string `json:"-"`
+	UserID           string `json:"-"`
 	AgentEnvironment string `json:"agent_env,omitempty"`
 }
 
@@ -31,7 +35,7 @@ type Event struct {
 
 type Emitter func(Event) error
 
-func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) error {
+func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) (runErr error) {
 	if strings.TrimSpace(req.ConversationID) == "" || strings.TrimSpace(req.Message) == "" {
 		return fmt.Errorf("conversation_id and message are required")
 	}
@@ -45,6 +49,21 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 	if req.WorkspaceID != "" && snapshot.WorkspaceID != "" && req.WorkspaceID != snapshot.WorkspaceID {
 		return fmt.Errorf("conversation is outside the active workspace")
 	}
+	ctx, finishTrace := courseotel.StartRun(ctx, courseotel.RunContext{
+		WorkspaceID: snapshot.WorkspaceID, AgentVersionID: snapshot.ID,
+		ConversationID: req.ConversationID, UserID: req.UserID,
+	})
+	defer func() { finishTrace(runErr) }()
+	runStatus := "failed"
+	defer func() {
+		if e.audit == nil || req.UserID == "" || snapshot.WorkspaceID == "" {
+			return
+		}
+		_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
+			WorkspaceID: snapshot.WorkspaceID, ActorID: req.UserID, Action: "agent.run." + runStatus,
+			ResourceID: req.ConversationID, Data: map[string]any{"agent_version_id": snapshot.ID},
+		})
+	}()
 	plan, err := e.executionPlan(ctx, snapshot)
 	if err != nil {
 		return err
@@ -81,11 +100,13 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 			if err := emitContext(ctx, emit, Event{Type: "guard_blocked", Data: map[string]any{"hook": "on_input", "reasons": decision.Reasons}}); err != nil {
 				return err
 			}
-			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "blocked"}})
+			runStatus = "blocked"
+			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": runStatus}})
 		}
 		input = decision.SanitizedText
 		plan = e.guardExecutionPlan(plan, snapshot.WorkspaceID)
 	}
+	plan = observeExecutionPlan(plan)
 	messages := []*schema.Message{schema.SystemMessage(systemPrompt)}
 	if history, ok := e.platform.(ConversationMessageStore); ok {
 		stored, historyErr := history.ListMessages(ctx, snapshot.WorkspaceID, req.ConversationID)
@@ -105,7 +126,7 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		}
 	}
 	messages = append(messages, schema.UserMessage(input))
-	answer, streamed, err := e.runPlan(ctx, req.ConversationID, snapshot, plan, packages, messages, emit)
+	answer, streamed, err := e.runPlan(ctx, req.ConversationID, req.UserID, snapshot, plan, packages, messages, emit)
 	if err != nil {
 		var awaiting *AwaitingApprovalError
 		if errors.As(err, &awaiting) {
@@ -115,7 +136,8 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 			}}); emitErr != nil {
 				return emitErr
 			}
-			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "awaiting_approval"}})
+			runStatus = "awaiting_approval"
+			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": runStatus}})
 		}
 		_ = emitContext(ctx, emit, Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		return fmt.Errorf("generate: %w", err)
@@ -129,7 +151,8 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 			if err := emitContext(ctx, emit, Event{Type: "guard_blocked", Data: map[string]any{"hook": "on_output", "reasons": decision.Reasons}}); err != nil {
 				return err
 			}
-			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "blocked"}})
+			runStatus = "blocked"
+			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": runStatus}})
 		}
 		answer.Content = decision.SanitizedText
 	}
@@ -148,7 +171,11 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 	if err := emitContext(ctx, emit, Event{Type: "answer_done", Text: answer.Content}); err != nil {
 		return err
 	}
-	return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
+	if err := emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "completed"}}); err != nil {
+		return err
+	}
+	runStatus = "completed"
+	return nil
 }
 
 func (e *Engine) resolveSkills(ctx context.Context, snapshot *AgentSnapshot) ([]platformskill.Package, error) {
@@ -191,7 +218,7 @@ func (e *Engine) executionPlan(ctx context.Context, snapshot *AgentSnapshot) (*l
 }
 
 func (e *Engine) runPlan(
-	ctx context.Context, conversationID string, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
+	ctx context.Context, conversationID, actorID string, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
 	packages []platformskill.Package, messages []*schema.Message, emit Emitter,
 ) (*schema.Message, bool, error) {
 	if plan == nil || plan.Model == nil {
@@ -209,6 +236,12 @@ func (e *Engine) runPlan(
 		}
 	}
 	skillRuntime, err := skillrunner.NewRuntime(ctx, packages, bindings, messages[len(messages)-1].Content, func(pkg platformskill.Package) error {
+		if e.audit != nil && actorID != "" {
+			_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
+				WorkspaceID: snapshot.WorkspaceID, ActorID: actorID, Action: "skill.triggered",
+				ResourceID: pkg.Name, Data: map[string]any{"conversation_id": conversationID},
+			})
+		}
 		return emitContext(ctx, emit, Event{Type: "skill_trigger", Data: map[string]string{"name": pkg.Name}})
 	})
 	if err != nil {
@@ -229,7 +262,8 @@ func (e *Engine) runPlan(
 		runner := NewADKRunner(plan.Model, e.tools, snapshot.WorkspaceID).
 			WithModelPolicy(plan.Retry, plan.Failover).
 			WithToolAuthorization(authorize).
-			WithApprovals(e.approvals, conversationID)
+			WithApprovals(e.approvals, conversationID).
+			WithAudit(e.audit, actorID)
 		if skillRuntime != nil {
 			runner.WithHandlers(skillRuntime.Handlers...).
 				WithSkillState(skillRuntime.ActiveName, skillRuntime.Restore)
@@ -314,6 +348,45 @@ func (e *Engine) guardExecutionPlan(plan *llm.ExecutionPlan, workspaceID string)
 		guarded.Failover = &failover
 	}
 	return &guarded
+}
+
+type observedChatModel struct{ next model.BaseChatModel }
+
+func (m observedChatModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (answer *schema.Message, err error) {
+	ctx, finish := courseotel.StartOperation(ctx, "llm.generate",
+		attribute.String("gen_ai.operation.name", "chat"),
+	)
+	defer func() { finish(err) }()
+	return m.next.Generate(ctx, messages, opts...)
+}
+
+func (m observedChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (stream *schema.StreamReader[*schema.Message], err error) {
+	ctx, finish := courseotel.StartOperation(ctx, "llm.stream",
+		attribute.String("gen_ai.operation.name", "chat"),
+	)
+	defer func() { finish(err) }()
+	return m.next.Stream(ctx, messages, opts...)
+}
+
+func observeExecutionPlan(plan *llm.ExecutionPlan) *llm.ExecutionPlan {
+	if plan == nil {
+		return nil
+	}
+	observed := *plan
+	observed.Model = observedChatModel{next: plan.Model}
+	if plan.Failover != nil {
+		failover := *plan.Failover
+		original := plan.Failover.GetFailoverModel
+		failover.GetFailoverModel = func(ctx context.Context, state *adk.FailoverContext[*schema.Message]) (model.BaseChatModel, []*schema.Message, error) {
+			next, replacement, err := original(ctx, state)
+			if err != nil {
+				return nil, replacement, err
+			}
+			return observedChatModel{next: next}, replacement, nil
+		}
+		observed.Failover = &failover
+	}
+	return &observed
 }
 
 func answerDeltas(answer string, maxRunes int) []string {

@@ -26,18 +26,34 @@ const (
 )
 
 type Request struct {
-	ID, WorkspaceID, RunID, ToolCallID, ToolVersionID string
-	Arguments                                         []byte
-	Checkpoint                                        []byte
-	Status                                            string
-	DecidedBy                                         string
-	ExpiresAt                                         time.Time
-	LeaseOwner                                        string
-	LeaseUntil                                        time.Time
-	FencingToken                                      uint64
-	Attempts                                          int
-	LastError                                         string
-	argumentsHash                                     [32]byte
+	ID            string    `json:"id"`
+	WorkspaceID   string    `json:"workspace_id"`
+	RunID         string    `json:"run_id"`
+	ToolCallID    string    `json:"tool_call_id"`
+	ToolVersionID string    `json:"tool_version_id"`
+	Arguments     []byte    `json:"arguments"`
+	Checkpoint    []byte    `json:"-"`
+	Status        string    `json:"status"`
+	DecidedBy     string    `json:"decided_by,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	LeaseOwner    string    `json:"lease_owner,omitempty"`
+	LeaseUntil    time.Time `json:"lease_until,omitempty"`
+	FencingToken  uint64    `json:"fencing_token,omitempty"`
+	Attempts      int       `json:"attempts,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	argumentsHash [32]byte
+}
+
+func (s *Service) List(_ context.Context, workspaceID string) []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Request, 0)
+	for _, request := range s.requests {
+		if request.WorkspaceID == workspaceID {
+			result = append(result, cloneRequest(request))
+		}
+	}
+	return result
 }
 
 type Lease struct {

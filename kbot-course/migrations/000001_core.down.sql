@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS audit_events;
 DROP TABLE IF EXISTS approval_requests;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS conversations;

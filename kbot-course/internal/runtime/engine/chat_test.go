@@ -15,6 +15,7 @@ import (
 	"github.com/Q1mi/kbot/internal/config"
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/approval"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
 	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
@@ -491,6 +492,30 @@ func TestRuntimeGuardBlocksInjectionBeforeModelCall(t *testing.T) {
 	}
 	if status != "blocked" || chatModel.calls != 0 {
 		t.Fatalf("status=%q modelCalls=%d", status, chatModel.calls)
+	}
+}
+
+func TestCompletedRunAppendsAuditChainEvent(t *testing.T) {
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots:    map[string]*AgentSnapshot{"v1": {ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "help"}},
+	}
+	ledger := audit.NewLedger()
+	runtime := New(controlPlane, replyChatModel{}).WithAudit(ledger)
+	if err := runtime.ChatStream(t.Context(), ChatRequest{
+		ConversationID: "c1", WorkspaceID: "ws-1", UserID: "user-1", Message: "hello",
+	}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ledger.List(t.Context(), "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Action != "agent.run.completed" || events[0].ActorID != "user-1" {
+		t.Fatalf("audit events = %#v", events)
+	}
+	if err := ledger.Verify(t.Context(), "ws-1"); err != nil {
+		t.Fatal(err)
 	}
 }
 

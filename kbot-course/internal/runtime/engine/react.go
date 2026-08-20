@@ -11,8 +11,11 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"go.opentelemetry.io/otel/attribute"
 
+	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/platform/approval"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
@@ -61,6 +64,8 @@ type ADKRunner struct {
 	runID        string
 	activeSkill  func() string
 	restoreSkill func(string) error
+	audit        AuditSink
+	actorID      string
 }
 
 func NewADKRunner(chatModel model.BaseChatModel, executor ToolExecutor, workspaceID string) *ADKRunner {
@@ -89,6 +94,11 @@ func (r *ADKRunner) WithApprovals(approvals ApprovalGate, runID string) *ADKRunn
 
 func (r *ADKRunner) WithSkillState(active func() string, restore func(string) error) *ADKRunner {
 	r.activeSkill, r.restoreSkill = active, restore
+	return r
+}
+
+func (r *ADKRunner) WithAudit(sink AuditSink, actorID string) *ADKRunner {
+	r.audit, r.actorID = sink, actorID
 	return r
 }
 
@@ -163,7 +173,10 @@ func (r *ADKRunner) newAgent(ctx context.Context, bindings []ToolBinding, maxSte
 	byName := make(map[string]ToolBinding, len(bindings))
 	for _, binding := range bindings {
 		byName[binding.Name] = binding
-		tools = append(tools, &bindingTool{binding: binding, executor: r.executor, workspaceID: r.workspaceID})
+		tools = append(tools, &bindingTool{
+			binding: binding, executor: r.executor, workspaceID: r.workspaceID,
+			audit: r.audit, actorID: r.actorID, runID: r.runID,
+		})
 	}
 	return adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name: "course_agent", Description: "kbot course agent", Model: r.model,
@@ -337,6 +350,9 @@ type bindingTool struct {
 	binding     ToolBinding
 	executor    ToolExecutor
 	workspaceID string
+	audit       AuditSink
+	actorID     string
+	runID       string
 }
 
 func (t *bindingTool) Info(context.Context) (*schema.ToolInfo, error) {
@@ -350,10 +366,30 @@ func (t *bindingTool) Info(context.Context) (*schema.ToolInfo, error) {
 
 func (t *bindingTool) InvokableRun(ctx context.Context, arguments string, _ ...einotool.Option) (string, error) {
 	callID, _ := ctx.Value(toolCallIDKey{}).(string)
-	result, err := t.executor.Execute(ctx, tooling.Call{
+	operation := "tool.execute"
+	if t.binding.SourceType == "code_execution" {
+		operation = "sandbox.execute"
+	}
+	toolContext, finish := courseotel.StartOperation(ctx, operation,
+		attribute.String("gen_ai.tool.name", t.binding.Name),
+		attribute.String("kbot.tool.version.id", t.binding.VersionID),
+		attribute.String("kbot.tool.call.id", callID),
+	)
+	result, err := t.executor.Execute(toolContext, tooling.Call{
 		WorkspaceID: t.workspaceID, ToolVersionID: t.binding.VersionID,
 		Arguments: []byte(arguments), IdempotencyKey: "react:" + callID,
 	})
+	finish(err)
+	if t.audit != nil && t.actorID != "" {
+		data := map[string]any{"conversation_id": t.runID, "tool_call_id": callID, "status_code": result.StatusCode}
+		if err != nil {
+			data["failed"] = true
+		}
+		_, _ = t.audit.Append(context.WithoutCancel(ctx), audit.Event{
+			WorkspaceID: t.workspaceID, ActorID: t.actorID, Action: operation,
+			ResourceID: t.binding.VersionID, Data: data,
+		})
+	}
 	if err != nil {
 		return "", err
 	}

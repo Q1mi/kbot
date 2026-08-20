@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
@@ -48,6 +49,7 @@ type Engine struct {
 	skills    SkillResolver
 	approvals ApprovalGate
 	guard     RuntimeGuard
+	audit     AuditSink
 }
 
 type ToolRuntime interface {
@@ -74,6 +76,10 @@ type ConversationMessageStore interface {
 
 type RuntimeGuard interface {
 	Evaluate(ctx context.Context, workspaceID, hook, text string) (guard.Decision, error)
+}
+
+type AuditSink interface {
+	Append(ctx context.Context, event audit.Event) (audit.Event, error)
 }
 
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
@@ -104,6 +110,11 @@ func (e *Engine) WithApprovals(approvals ApprovalGate) *Engine {
 
 func (e *Engine) WithGuard(runtimeGuard RuntimeGuard) *Engine {
 	e.guard = runtimeGuard
+	return e
+}
+
+func (e *Engine) WithAudit(sink AuditSink) *Engine {
+	e.audit = sink
 	return e
 }
 
