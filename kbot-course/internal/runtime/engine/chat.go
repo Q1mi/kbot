@@ -7,16 +7,16 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/Q1mi/kbot/internal/runtime/llm"
 )
 
-// ChatRequest 是一次运行请求；ConversationID 用于多轮会话续接。
 type ChatRequest struct {
 	ConversationID string `json:"conversation_id"`
 	Message        string `json:"message"`
 	WorkspaceID    string `json:"-"`
 }
 
-// Event 是 Runtime 对传输层公开的稳定事件信封。
 type Event struct {
 	Type string `json:"type"`
 	Data any    `json:"data,omitempty"`
@@ -39,60 +39,27 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 	if req.WorkspaceID != "" && snapshot.WorkspaceID != "" && req.WorkspaceID != snapshot.WorkspaceID {
 		return fmt.Errorf("conversation is outside the active workspace")
 	}
+	plan, err := e.executionPlan(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	systemPrompt := snapshot.SystemPrompt
+	if snapshot.PromptVersionID != "" {
+		if e.prompts == nil {
+			return fmt.Errorf("prompt resolver is required by the pinned snapshot")
+		}
+		systemPrompt, err = e.prompts.Render(ctx, snapshot.WorkspaceID, snapshot.PromptVersionID, map[string]string{})
+		if err != nil {
+			return fmt.Errorf("render pinned system prompt: %w", err)
+		}
+	}
 	if err := emitContext(ctx, emit, Event{Type: "run_started", Data: map[string]string{
-		"conversation_id":  req.ConversationID,
-		"agent_version_id": snapshot.ID,
+		"conversation_id": req.ConversationID, "agent_version_id": snapshot.ID,
 	}}); err != nil {
 		return err
 	}
-	messages := []*schema.Message{
-		schema.SystemMessage(snapshot.SystemPrompt),
-		schema.UserMessage(req.Message),
-	}
-	var answer *schema.Message
-	streamed := false
-	if len(snapshot.ToolVersionIDs) > 0 {
-		if e.tools == nil {
-			return fmt.Errorf("tool runtime is required by the pinned agent snapshot")
-		}
-		bindings, bindErr := e.tools.Bind(ctx, snapshot.WorkspaceID, snapshot.ToolVersionIDs)
-		if bindErr != nil {
-			return fmt.Errorf("bind pinned tools: %w", bindErr)
-		}
-		answer, err = NewADKRunner(e.model, e.tools, snapshot.WorkspaceID).Run(ctx, messages, bindings, snapshot.MaxSteps, emit)
-	} else {
-		if e.model == nil {
-			return fmt.Errorf("chat model is required")
-		}
-		stream, streamErr := e.model.Stream(ctx, messages)
-		if streamErr != nil {
-			err = streamErr
-		} else {
-			defer stream.Close()
-			var chunks []*schema.Message
-			for {
-				chunk, recvErr := stream.Recv()
-				if recvErr == io.EOF {
-					break
-				}
-				if recvErr != nil {
-					err = recvErr
-					break
-				}
-				chunks = append(chunks, chunk)
-				if chunk != nil && chunk.Content != "" {
-					if emitErr := emitContext(ctx, emit, Event{Type: "answer_delta", Text: chunk.Content}); emitErr != nil {
-						err = emitErr
-						break
-					}
-					streamed = true
-				}
-			}
-			if err == nil {
-				answer, err = schema.ConcatMessages(chunks)
-			}
-		}
-	}
+	messages := []*schema.Message{schema.SystemMessage(systemPrompt), schema.UserMessage(req.Message)}
+	answer, streamed, err := e.runPlan(ctx, snapshot, plan, messages, emit)
 	if err != nil {
 		_ = emitContext(ctx, emit, Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		return fmt.Errorf("generate: %w", err)
@@ -108,6 +75,78 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		return err
 	}
 	return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
+}
+
+func (e *Engine) executionPlan(ctx context.Context, snapshot *AgentSnapshot) (*llm.ExecutionPlan, error) {
+	if snapshot.ModelProfileVersionID == "" {
+		if e.model == nil {
+			return nil, fmt.Errorf("chat model is required")
+		}
+		return &llm.ExecutionPlan{Model: e.model}, nil
+	}
+	if e.profiles == nil || e.planner == nil {
+		return nil, fmt.Errorf("model profile resolver and execution planner are required by the pinned snapshot")
+	}
+	profile, err := e.profiles.Resolve(ctx, snapshot.WorkspaceID, snapshot.ModelProfileVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pinned model profile: %w", err)
+	}
+	plan, err := e.planner.PrepareExecution(ctx, profile)
+	if err != nil {
+		return nil, fmt.Errorf("prepare model execution: %w", err)
+	}
+	return plan, nil
+}
+
+func (e *Engine) runPlan(
+	ctx context.Context, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
+	messages []*schema.Message, emit Emitter,
+) (*schema.Message, bool, error) {
+	if plan == nil || plan.Model == nil {
+		return nil, false, fmt.Errorf("execution plan model is required")
+	}
+	var bindings []ToolBinding
+	if len(snapshot.ToolVersionIDs) > 0 {
+		if e.tools == nil {
+			return nil, false, fmt.Errorf("tool runtime is required by the pinned agent snapshot")
+		}
+		var err error
+		bindings, err = e.tools.Bind(ctx, snapshot.WorkspaceID, snapshot.ToolVersionIDs)
+		if err != nil {
+			return nil, false, fmt.Errorf("bind pinned tools: %w", err)
+		}
+	}
+	if len(bindings) > 0 || plan.Retry != nil || plan.Failover != nil {
+		answer, err := NewADKRunner(plan.Model, e.tools, snapshot.WorkspaceID).
+			WithModelPolicy(plan.Retry, plan.Failover).
+			Run(ctx, messages, bindings, snapshot.MaxSteps, emit)
+		return answer, false, err
+	}
+	stream, err := plan.Model.Stream(ctx, messages)
+	if err != nil {
+		return nil, false, err
+	}
+	defer stream.Close()
+	var chunks []*schema.Message
+	streamed := false
+	for {
+		chunk, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			return nil, streamed, recvErr
+		}
+		chunks = append(chunks, chunk)
+		if chunk != nil && chunk.Content != "" {
+			if err := emitContext(ctx, emit, Event{Type: "answer_delta", Text: chunk.Content}); err != nil {
+				return nil, streamed, err
+			}
+			streamed = true
+		}
+	}
+	answer, err := schema.ConcatMessages(chunks)
+	return answer, streamed, err
 }
 
 func answerDeltas(answer string, maxRunes int) []string {

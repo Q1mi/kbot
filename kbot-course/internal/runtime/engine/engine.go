@@ -8,32 +8,39 @@ import (
 	"github.com/cloudwego/eino/components/model"
 
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/platform/modelconfig"
+	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
 // Platform 是 Runtime 读取控制面数据所需的最小接口。
-// Runtime 只按 Conversation 中固定的版本读取快照。
 type Platform interface {
 	LoadConversation(ctx context.Context, conversationID string) (*domain.Conversation, error)
 	GetAgentSnapshotByVersion(ctx context.Context, agentVersionID string) (*AgentSnapshot, error)
 }
 
-// AgentSnapshot 是 Runtime 已解析好的固定配置。
-// 后续课程会逐步加入 Model、Prompt、Tool、Skill 和知识库版本。
 type AgentSnapshot struct {
-	ID             string
-	AgentID        string
-	WorkspaceID    string
-	SystemPrompt   string
-	MaxSteps       int
-	ToolVersionIDs []string
+	ID                    string
+	AgentID               string
+	WorkspaceID           string
+	SystemPrompt          string
+	MaxSteps              int
+	PromptVersionID       string
+	ModelProfileVersionID string
+	ToolVersionIDs        []string
 }
 
-// Engine 只依赖稳定接口，不直接依赖控制面的具体存储实现。
+type executionPlanner interface {
+	PrepareExecution(context.Context, modelconfig.ProfileVersion) (*llm.ExecutionPlan, error)
+}
+
 type Engine struct {
 	platform Platform
 	model    model.BaseChatModel
+	planner  executionPlanner
 	tools    ToolRuntime
+	prompts  PromptRenderer
+	profiles ModelProfileResolver
 }
 
 type ToolRuntime interface {
@@ -41,9 +48,18 @@ type ToolRuntime interface {
 	Execute(ctx context.Context, call tooling.Call) (tooling.Result, error)
 }
 
-// New 创建 Agent Runtime。
+type PromptRenderer interface {
+	Render(ctx context.Context, workspaceID, versionID string, variables map[string]string) (string, error)
+}
+
+type ModelProfileResolver interface {
+	Resolve(ctx context.Context, workspaceID, versionID string) (modelconfig.ProfileVersion, error)
+}
+
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
-	return &Engine{platform: platform, model: chatModel}
+	engine := &Engine{platform: platform, model: chatModel}
+	engine.planner, _ = chatModel.(executionPlanner)
+	return engine
 }
 
 func (e *Engine) WithTools(tools ToolRuntime) *Engine {
@@ -51,16 +67,15 @@ func (e *Engine) WithTools(tools ToolRuntime) *Engine {
 	return e
 }
 
-// ResolveSnapshot 按会话固定的 AgentVersion 解析运行快照。
-// 该方法会在后续课程中进入完整 ChatStream 调用链。
-func (e *Engine) ResolveSnapshot(
-	ctx context.Context,
-	conversationID string,
-) (*AgentSnapshot, error) {
+func (e *Engine) WithRuntimeConfig(prompts PromptRenderer, profiles ModelProfileResolver) *Engine {
+	e.prompts, e.profiles = prompts, profiles
+	return e
+}
+
+func (e *Engine) ResolveSnapshot(ctx context.Context, conversationID string) (*AgentSnapshot, error) {
 	if e.platform == nil {
 		return nil, fmt.Errorf("platform is required")
 	}
-
 	conversation, err := e.platform.LoadConversation(ctx, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("load conversation: %w", err)
@@ -68,17 +83,12 @@ func (e *Engine) ResolveSnapshot(
 	if conversation.AgentVersionID == "" {
 		return nil, fmt.Errorf("conversation has no pinned agent version")
 	}
-
 	snapshot, err := e.platform.GetAgentSnapshotByVersion(ctx, conversation.AgentVersionID)
 	if err != nil {
 		return nil, fmt.Errorf("get agent snapshot: %w", err)
 	}
 	if snapshot.ID != conversation.AgentVersionID {
-		return nil, fmt.Errorf(
-			"snapshot version mismatch: want %s, got %s",
-			conversation.AgentVersionID,
-			snapshot.ID,
-		)
+		return nil, fmt.Errorf("snapshot version mismatch: want %s, got %s", conversation.AgentVersionID, snapshot.ID)
 	}
 	if conversation.WorkspaceID != "" && snapshot.WorkspaceID != "" && conversation.WorkspaceID != snapshot.WorkspaceID {
 		return nil, fmt.Errorf("conversation and agent snapshot belong to different workspaces")

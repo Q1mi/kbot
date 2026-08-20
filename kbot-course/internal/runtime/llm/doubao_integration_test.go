@@ -42,7 +42,7 @@ func TestDoubaoGenerate(t *testing.T) {
 	defer cancel()
 	response, err := gateway.Generate(ctx, []*schema.Message{
 		schema.UserMessage("请用一句话介绍你自己。"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("generate with Doubao: %v", err)
 	}

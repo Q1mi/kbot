@@ -23,17 +23,26 @@ type ADKRunner struct {
 	model       model.BaseChatModel
 	executor    ToolExecutor
 	workspaceID string
+	retry       *adk.ModelRetryConfig
+	failover    *adk.ModelFailoverConfig[*schema.Message]
 }
 
 func NewADKRunner(chatModel model.BaseChatModel, executor ToolExecutor, workspaceID string) *ADKRunner {
 	return &ADKRunner{model: chatModel, executor: executor, workspaceID: workspaceID}
 }
 
+func (r *ADKRunner) WithModelPolicy(
+	retry *adk.ModelRetryConfig, failover *adk.ModelFailoverConfig[*schema.Message],
+) *ADKRunner {
+	r.retry, r.failover = retry, failover
+	return r
+}
+
 func (r *ADKRunner) Run(
 	ctx context.Context, messages []*schema.Message, bindings []ToolBinding, maxSteps int, emit Emitter,
 ) (*schema.Message, error) {
-	if r.model == nil || r.executor == nil {
-		return nil, fmt.Errorf("chat model and tool executor are required")
+	if r.model == nil || (len(bindings) > 0 && r.executor == nil) {
+		return nil, fmt.Errorf("chat model and required tool executor are required")
 	}
 	if maxSteps <= 0 {
 		return nil, fmt.Errorf("max steps must be positive")
@@ -48,7 +57,9 @@ func (r *ADKRunner) Run(
 			Tools: tools, ExecuteSequentially: true,
 			ToolCallMiddlewares: []compose.ToolMiddleware{toolEventMiddleware(emit)},
 		}},
-		MaxIterations: maxSteps,
+		MaxIterations:       maxSteps,
+		ModelRetryConfig:    r.retry,
+		ModelFailoverConfig: r.failover,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Eino ChatModelAgent: %w", err)

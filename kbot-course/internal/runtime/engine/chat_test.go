@@ -2,14 +2,20 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Q1mi/kbot/internal/config"
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/platform/modelconfig"
+	"github.com/Q1mi/kbot/internal/platform/prompt"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
+	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -23,6 +29,68 @@ func (g replyChatModel) Generate(context.Context, []*schema.Message, ...model.Op
 		answer = "hello"
 	}
 	return schema.AssistantMessage(answer, nil), nil
+}
+
+func TestChatStreamResolvesEinoPromptAndPinnedModelPlan(t *testing.T) {
+	var requestedModel, systemPrompt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role, Content string
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		requestedModel = request.Model
+		if len(request.Messages) > 0 {
+			systemPrompt = request.Messages[0].Content
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-course", "object": "chat.completion", "created": 1, "model": request.Model,
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "profile reply"}, "finish_reason": "stop"}},
+		})
+	}))
+	defer server.Close()
+
+	gateway, err := llm.NewGateway(config.Config{
+		LLMBaseURL: server.URL + "/v1", LLMAPIKey: "fallback", LLMModel: "fallback", LLMTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := prompt.NewService()
+	if err := prompts.Publish(t.Context(), prompt.Version{
+		ID: "prompt-v1", WorkspaceID: "ws-1", Name: "system", Template: "Pinned system prompt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	profiles := modelconfig.NewRegistry()
+	if err := profiles.Publish(t.Context(), modelconfig.ProfileVersion{
+		ID: "profile-v1", WorkspaceID: "ws-1", ClassificationMax: "internal",
+		Deployments: []modelconfig.Deployment{{
+			Provider: "doubao", Model: "doubao-course", BaseURL: server.URL + "/v1", APIKey: "course-key", MaxRetries: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots: map[string]*AgentSnapshot{"v1": {
+			ID: "v1", WorkspaceID: "ws-1", MaxSteps: 4,
+			PromptVersionID: "prompt-v1", ModelProfileVersionID: "profile-v1",
+		}},
+	}
+	runtime := New(controlPlane, gateway).WithRuntimeConfig(prompts, profiles)
+	if err := runtime.ChatStream(t.Context(), ChatRequest{
+		ConversationID: "c1", WorkspaceID: "ws-1", Message: "hi",
+	}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if requestedModel != "doubao-course" || systemPrompt != "Pinned system prompt" {
+		t.Fatalf("model=%q system=%q", requestedModel, systemPrompt)
+	}
 }
 
 func (g replyChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {

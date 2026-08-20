@@ -4,11 +4,8 @@ package retriever
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
-
-	einoretriever "github.com/cloudwego/eino/components/retriever"
-	"github.com/cloudwego/eino/flow/retriever/router"
-	"github.com/cloudwego/eino/schema"
 )
 
 type Result struct {
@@ -36,55 +33,57 @@ func (h *Hybrid) Search(ctx context.Context, workspaceID, query string, limit in
 	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(query) == "" || limit <= 0 {
 		return nil, fmt.Errorf("workspace, query and positive limit are required")
 	}
-	hybrid, err := router.NewRetriever(ctx, &router.Config{
-		Retrievers: map[string]einoretriever.Retriever{
-			"keyword": &searcherRetriever{searcher: h.keyword, workspaceID: workspaceID},
-			"vector":  &searcherRetriever{searcher: h.vector, workspaceID: workspaceID},
-		},
-		Router: func(context.Context, string) ([]string, error) {
-			return []string{"keyword", "vector"}, nil
-		},
+	type response struct {
+		results []Result
+		err     error
+	}
+	keywordCh, vectorCh := make(chan response, 1), make(chan response, 1)
+	go func() {
+		results, err := h.keyword.Search(ctx, workspaceID, query, limit*2)
+		keywordCh <- response{results, err}
+	}()
+	go func() {
+		results, err := h.vector.Search(ctx, workspaceID, query, limit*2)
+		vectorCh <- response{results, err}
+	}()
+	keyword, vector := <-keywordCh, <-vectorCh
+	if keyword.err != nil {
+		return nil, fmt.Errorf("keyword search: %w", keyword.err)
+	}
+	if vector.err != nil {
+		return nil, fmt.Errorf("vector search: %w", vector.err)
+	}
+	const rrfK = 60.0
+	merged := make(map[string]Result)
+	add := func(results []Result) {
+		seen := make(map[string]struct{}, len(results))
+		for rank, result := range results {
+			if _, duplicate := seen[result.ID]; duplicate {
+				continue
+			}
+			seen[result.ID] = struct{}{}
+			current := merged[result.ID]
+			if current.ID == "" {
+				current = Result{ID: result.ID, SourceURI: result.SourceURI, Text: result.Text}
+			}
+			current.Score += 1 / (rrfK + float64(rank+1))
+			merged[result.ID] = current
+		}
+	}
+	add(keyword.results)
+	add(vector.results)
+	out := make([]Result, 0, len(merged))
+	for _, result := range merged {
+		out = append(out, result)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Score > out[j].Score
 	})
-	if err != nil {
-		return nil, fmt.Errorf("create Eino retriever router: %w", err)
-	}
-	documents, err := hybrid.Retrieve(ctx, query, einoretriever.WithTopK(limit*2))
-	if err != nil {
-		return nil, fmt.Errorf("hybrid retrieve: %w", err)
-	}
-	out := make([]Result, 0, len(documents))
-	for _, document := range documents {
-		sourceURI, _ := document.MetaData["source_uri"].(string)
-		out = append(out, Result{ID: document.ID, SourceURI: sourceURI, Text: document.Content})
-	}
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
-}
-
-type searcherRetriever struct {
-	searcher    Searcher
-	workspaceID string
-}
-
-func (r *searcherRetriever) Retrieve(
-	ctx context.Context, query string, opts ...einoretriever.Option,
-) ([]*schema.Document, error) {
-	topK := 10
-	if configured := einoretriever.GetCommonOptions(nil, opts...).TopK; configured != nil && *configured > 0 {
-		topK = *configured
-	}
-	results, err := r.searcher.Search(ctx, r.workspaceID, query, topK)
-	if err != nil {
-		return nil, err
-	}
-	documents := make([]*schema.Document, 0, len(results))
-	for _, result := range results {
-		documents = append(documents, &schema.Document{
-			ID: result.ID, Content: result.Text,
-			MetaData: map[string]any{"source_uri": result.SourceURI, "raw_score": result.Score},
-		})
-	}
-	return documents, nil
 }

@@ -16,6 +16,8 @@ import (
 	"github.com/Q1mi/kbot/internal/platform"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
+	"github.com/Q1mi/kbot/internal/platform/modelconfig"
+	"github.com/Q1mi/kbot/internal/platform/prompt"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
@@ -41,6 +43,8 @@ func main() {
 	toolRegistry := platformtool.NewRegistry()
 	knowledgeBases := kb.NewService()
 	knowledgeSearch := retriever.NewKnowledgeSearch(knowledgeBases)
+	prompts := prompt.NewService()
+	profiles := modelconfig.NewRegistry([]byte(cfg.JWTSecret))
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -63,11 +67,14 @@ func main() {
 		body, marshalErr := json.Marshal(results)
 		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
 	})
-	runtime.WithTools(toolExecutor)
+	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles)
 
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch}),
+		Addr: cfg.HTTPAddr,
+		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
+			Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
+			Prompts: prompts, Profiles: profiles,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
