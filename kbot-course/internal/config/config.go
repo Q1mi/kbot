@@ -18,6 +18,7 @@ type Config struct {
 	LLMTimeout         time.Duration
 	SandboxRunnerURL   string
 	SandboxRunnerToken string
+	DatabaseURL        string
 }
 
 func Load() Config {
@@ -31,6 +32,7 @@ func Load() Config {
 		LLMTimeout:         durationOrDefault("KBOT_LLM_TIMEOUT_SECONDS", 30*time.Second),
 		SandboxRunnerURL:   valueOrDefault("KBOT_SANDBOX_RUNNER_URL", "http://127.0.0.1:8081"),
 		SandboxRunnerToken: os.Getenv("KBOT_SANDBOX_RUNNER_TOKEN"),
+		DatabaseURL:        valueOrDefault("KBOT_DATABASE_URL", "postgres://kbot:kbot@127.0.0.1:5432/kbot?sslmode=disable"),
 	}
 }
 
