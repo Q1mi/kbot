@@ -1,4 +1,4 @@
-.PHONY: build test run admin-build crossborder-build crossborder-test doubao-check
+.PHONY: build test run sandbox-runner-build sandbox-runner-run admin-build crossborder-build crossborder-test doubao-check
 
 build:
 	@mkdir -p bin
@@ -13,6 +13,13 @@ run:
 doubao-check:
 	@test -n "$$ARK_API_KEY" || (echo "ARK_API_KEY is required" && exit 1)
 	go test -tags=integration -run TestDoubaoGenerate -v ./internal/runtime/llm
+
+sandbox-runner-build:
+	@mkdir -p bin
+	go build -o bin/sandbox-runner ./cmd/sandbox-runner
+
+sandbox-runner-run:
+	go run ./cmd/sandbox-runner
 
 admin-build:
 	cd web/admin && npm run build
