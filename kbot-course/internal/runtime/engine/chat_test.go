@@ -52,6 +52,27 @@ type historyChatModel struct {
 	lastSeen []*schema.Message
 }
 
+type twoSensitiveChatModel struct{ calls int }
+
+func (m *twoSensitiveChatModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	m.calls++
+	if m.calls == 1 {
+		return schema.AssistantMessage("", []schema.ToolCall{
+			{ID: "call-first", Type: "function", Function: schema.FunctionCall{Name: "first", Arguments: `{}`}},
+			{ID: "call-second", Type: "function", Function: schema.FunctionCall{Name: "second", Arguments: `{}`}},
+		}), nil
+	}
+	return schema.AssistantMessage("两个操作均已完成", nil), nil
+}
+
+func (m *twoSensitiveChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := m.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
+}
+
 func (m *historyChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
 	m.calls++
 	m.lastSeen = append([]*schema.Message(nil), messages...)
@@ -272,6 +293,105 @@ func TestSensitiveToolPausesThroughEinoStatefulInterrupt(t *testing.T) {
 	if err != nil || request.ToolCallID != "call-1" || request.ToolVersionID != "refund-v1" || len(request.Checkpoint) == 0 {
 		t.Fatalf("approval request = %#v, err = %v", request, err)
 	}
+	if err := approvals.Decide(t.Context(), "ws-1", approvalID, "reviewer", true); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := approvals.Resume(
+		t.Context(), "ws-1", approvalID, request.RunID, request.ToolCallID, request.ToolVersionID, request.Arguments,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resumedAnswer string
+	if err := runtime.ResumeApproved(t.Context(), request, checkpoint, func(event Event) error {
+		if event.Type == "answer_done" {
+			resumedAnswer = event.Text
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if toolCalls.Load() != 1 || resumedAnswer != "退款已提交" {
+		t.Fatalf("toolCalls=%d answer=%q", toolCalls.Load(), resumedAnswer)
+	}
+}
+
+func TestResumeTargetsExactInterruptWhenTwoSensitiveToolsAreQueued(t *testing.T) {
+	var toolCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		toolCalls.Add(1)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	registry := platformtool.NewRegistry()
+	for _, version := range []platformtool.Version{
+		{ID: "first-v1", WorkspaceID: "ws-1", Name: "first", Endpoint: server.URL, Published: true, Sensitive: true, InputSchema: []byte(`{"type":"object"}`)},
+		{ID: "second-v1", WorkspaceID: "ws-1", Name: "second", Endpoint: server.URL, Published: true, Sensitive: true, InputSchema: []byte(`{"type":"object"}`)},
+	} {
+		if err := registry.Register(t.Context(), version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots: map[string]*AgentSnapshot{"v1": {
+			ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "help", MaxSteps: 6,
+			ToolVersionIDs: []string{"first-v1", "second-v1"},
+		}},
+	}
+	approvals := approval.NewService()
+	runtime := New(controlPlane, &twoSensitiveChatModel{}).
+		WithTools(tooling.NewExecutor(registry, server.Client(), "127.0.0.1")).
+		WithApprovals(approvals)
+	firstApproval := ""
+	if err := runtime.ChatStream(t.Context(), ChatRequest{
+		ConversationID: "c1", WorkspaceID: "ws-1", Message: "run both",
+	}, func(event Event) error {
+		if event.Type == "approval_requested" {
+			firstApproval = event.Data.(map[string]string)["approval_id"]
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondApproval := resumeApprovalForTest(t, approvals, runtime, firstApproval)
+	if toolCalls.Load() != 1 || secondApproval == "" {
+		t.Fatalf("after first resume: calls=%d second=%q", toolCalls.Load(), secondApproval)
+	}
+	answer := resumeApprovalForTest(t, approvals, runtime, secondApproval)
+	if toolCalls.Load() != 2 || answer != "两个操作均已完成" {
+		t.Fatalf("after second resume: calls=%d answer=%q", toolCalls.Load(), answer)
+	}
+}
+
+func resumeApprovalForTest(t *testing.T, approvals *approval.Service, runtime *Engine, approvalID string) string {
+	t.Helper()
+	request, err := approvals.Get(t.Context(), "ws-1", approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approvals.Decide(t.Context(), "ws-1", approvalID, "reviewer", true); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := approvals.Resume(
+		t.Context(), "ws-1", approvalID, request.RunID, request.ToolCallID, request.ToolVersionID, request.Arguments,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := ""
+	if err := runtime.ResumeApproved(t.Context(), request, checkpoint, func(event Event) error {
+		switch event.Type {
+		case "approval_requested":
+			result = event.Data.(map[string]string)["approval_id"]
+		case "answer_done":
+			result = event.Text
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func TestChatStreamActivatesSkillThroughEinoMiddleware(t *testing.T) {

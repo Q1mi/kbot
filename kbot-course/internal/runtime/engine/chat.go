@@ -198,7 +198,8 @@ func (e *Engine) runPlan(
 			WithToolAuthorization(authorize).
 			WithApprovals(e.approvals, conversationID)
 		if skillRuntime != nil {
-			runner.WithHandlers(skillRuntime.Handlers...)
+			runner.WithHandlers(skillRuntime.Handlers...).
+				WithSkillState(skillRuntime.ActiveName, skillRuntime.Restore)
 		}
 		answer, err := runner.Run(ctx, messages, bindings, maxSteps, emit)
 		return answer, false, err

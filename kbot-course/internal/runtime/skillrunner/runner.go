@@ -56,6 +56,25 @@ func (r *Runtime) Authorize(toolName, arguments string) error {
 	return r.policy.Authorize(toolName, arguments)
 }
 
+func (r *Runtime) ActiveName() string {
+	if r == nil || r.policy == nil {
+		return ""
+	}
+	active := r.policy.Active()
+	if active == nil {
+		return ""
+	}
+	return active.Name
+}
+
+func (r *Runtime) Restore(name string) error {
+	if r == nil || r.policy == nil || name == "" {
+		return nil
+	}
+	_, err := r.policy.Activate(name)
+	return err
+}
+
 // NewRuntime 使用 Eino 官方 Skill middleware 完成 L1 列表、skill Tool 与 L2 内容注入。
 func NewRuntime(
 	ctx context.Context,

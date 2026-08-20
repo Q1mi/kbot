@@ -91,7 +91,6 @@ func (s *Service) Create(ctx context.Context, request Request) (*Request, error)
 	return &copy, nil
 }
 
-// SaveCheckpoint 在 Eino ADK 完成中断快照后，把框架检查点与审批请求绑定。
 func (s *Service) SaveCheckpoint(ctx context.Context, workspaceID, requestID string, checkpoint []byte) error {
 	if len(checkpoint) == 0 {
 		return fmt.Errorf("approval checkpoint is required")
@@ -265,6 +264,27 @@ func (s *Service) Get(ctx context.Context, workspaceID, requestID string) (*Requ
 	}
 	copy := cloneRequest(request)
 	return &copy, nil
+}
+
+func (s *Service) ListReady(ctx context.Context, limit int) ([]Request, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if s.pool != nil {
+		return s.listReadyPostgres(ctx, limit)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Request, 0, min(limit, len(s.requests)))
+	for _, request := range s.requests {
+		if request.Status == StatusApproved || (request.Status == StatusExecuting && !request.LeaseUntil.After(s.now())) {
+			result = append(result, cloneRequest(request))
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
 }
 func cloneRequest(request Request) Request {
 	request.Arguments = append([]byte(nil), request.Arguments...)

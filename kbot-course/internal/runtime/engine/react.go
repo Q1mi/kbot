@@ -19,16 +19,17 @@ import (
 const frameworkCheckpointVersion = 1
 
 type approvalInterruptInfo struct {
-	ApprovalID, RunID, ToolName, ToolCallID, ToolVersionID, Arguments string
+	ApprovalID, RunID, ToolName, ToolCallID, ToolVersionID, Arguments, ActiveSkillName string
 }
 
 type approvalInterruptState struct{ Info approvalInterruptInfo }
 type approvalResumeDecision struct{ Approved bool }
 
 type persistedFrameworkCheckpoint struct {
-	Version     int    `json:"version"`
-	InterruptID string `json:"interrupt_id"`
-	Data        []byte `json:"data"`
+	Version         int    `json:"version"`
+	InterruptID     string `json:"interrupt_id"`
+	ActiveSkillName string `json:"active_skill_name,omitempty"`
+	Data            []byte `json:"data"`
 }
 
 func init() {
@@ -49,15 +50,17 @@ type ApprovalGate interface {
 }
 
 type ADKRunner struct {
-	model       model.BaseChatModel
-	executor    ToolExecutor
-	workspaceID string
-	retry       *adk.ModelRetryConfig
-	failover    *adk.ModelFailoverConfig[*schema.Message]
-	handlers    []adk.ChatModelAgentMiddleware
-	authorize   func(name, arguments string) error
-	approvals   ApprovalGate
-	runID       string
+	model        model.BaseChatModel
+	executor     ToolExecutor
+	workspaceID  string
+	retry        *adk.ModelRetryConfig
+	failover     *adk.ModelFailoverConfig[*schema.Message]
+	handlers     []adk.ChatModelAgentMiddleware
+	authorize    func(name, arguments string) error
+	approvals    ApprovalGate
+	runID        string
+	activeSkill  func() string
+	restoreSkill func(string) error
 }
 
 func NewADKRunner(chatModel model.BaseChatModel, executor ToolExecutor, workspaceID string) *ADKRunner {
@@ -81,6 +84,11 @@ func (r *ADKRunner) WithToolAuthorization(authorize func(name, arguments string)
 
 func (r *ADKRunner) WithApprovals(approvals ApprovalGate, runID string) *ADKRunner {
 	r.approvals, r.runID = approvals, runID
+	return r
+}
+
+func (r *ADKRunner) WithSkillState(active func() string, restore func(string) error) *ADKRunner {
+	r.activeSkill, r.restoreSkill = active, restore
 	return r
 }
 
@@ -111,6 +119,35 @@ func (r *ADKRunner) Run(
 	}
 	if answer == nil {
 		return nil, fmt.Errorf("Eino ADK run finished without a final answer")
+	}
+	return answer, nil
+}
+
+func (r *ADKRunner) Resume(
+	ctx context.Context, checkpointID string, checkpoint []byte, interruptID string,
+	bindings []ToolBinding, maxSteps int, emit Emitter,
+) (*schema.Message, error) {
+	agent, err := r.newAgent(ctx, bindings, maxSteps, emit)
+	if err != nil {
+		return nil, err
+	}
+	store := newFrameworkCheckpointStore(checkpointID, checkpoint)
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, CheckPointStore: store})
+	iterator, err := runner.ResumeWithParams(ctx, checkpointID, &adk.ResumeParams{Targets: map[string]any{
+		interruptID: approvalResumeDecision{Approved: true},
+	}})
+	if err != nil {
+		return nil, err
+	}
+	answer, interrupted, err := consumeADKEvents(iterator)
+	if err != nil {
+		return nil, err
+	}
+	if len(interrupted) > 0 {
+		return nil, r.persistInterrupts(ctx, store.Latest(), interrupted)
+	}
+	if answer == nil {
+		return nil, fmt.Errorf("Eino ADK resume finished without a final answer")
 	}
 	return answer, nil
 }
@@ -163,10 +200,18 @@ func (r *ADKRunner) approvalInterrupt(bindings map[string]ToolBinding) func(cont
 				ApprovalID: created.ID, RunID: r.runID, ToolName: input.Name, ToolCallID: input.CallID,
 				ToolVersionID: binding.VersionID, Arguments: input.Arguments,
 			}
+			if r.activeSkill != nil {
+				info.ActiveSkillName = r.activeSkill()
+			}
 			return einotool.StatefulInterrupt(ctx, info, approvalInterruptState{Info: info})
 		}
 		if !hasState {
 			return fmt.Errorf("approval interrupt state is missing")
+		}
+		if stored.Info.ActiveSkillName != "" && r.restoreSkill != nil {
+			if err := r.restoreSkill(stored.Info.ActiveSkillName); err != nil {
+				return err
+			}
 		}
 		isTarget, hasData, decision := einotool.GetResumeContext[approvalResumeDecision](ctx)
 		if !isTarget {
@@ -192,7 +237,8 @@ func (r *ADKRunner) persistInterrupts(ctx context.Context, checkpoint []byte, in
 			continue
 		}
 		payload, err := json.Marshal(persistedFrameworkCheckpoint{
-			Version: frameworkCheckpointVersion, InterruptID: interrupt.ID, Data: checkpoint,
+			Version: frameworkCheckpointVersion, InterruptID: interrupt.ID,
+			ActiveSkillName: info.ActiveSkillName, Data: checkpoint,
 		})
 		if err != nil {
 			return err
@@ -252,12 +298,24 @@ func consumeADKEvents(iterator *adk.AsyncIterator[*adk.AgentEvent]) (*schema.Mes
 }
 
 type frameworkCheckpointStore struct {
-	mu     sync.RWMutex
-	latest []byte
+	mu      sync.RWMutex
+	initial map[string][]byte
+	latest  []byte
 }
 
-func (s *frameworkCheckpointStore) Get(context.Context, string) ([]byte, bool, error) {
-	return nil, false, nil
+func newFrameworkCheckpointStore(id string, data []byte) *frameworkCheckpointStore {
+	store := &frameworkCheckpointStore{}
+	if id != "" && len(data) > 0 {
+		store.initial = map[string][]byte{id: append([]byte(nil), data...)}
+	}
+	return store
+}
+
+func (s *frameworkCheckpointStore) Get(_ context.Context, id string) ([]byte, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, ok := s.initial[id]
+	return append([]byte(nil), data...), ok, nil
 }
 
 func (s *frameworkCheckpointStore) Set(_ context.Context, _ string, data []byte) error {

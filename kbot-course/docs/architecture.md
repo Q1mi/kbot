@@ -47,3 +47,8 @@ Docker Socket 权限很高，课堂与开发环境应限制 Runner 的网络入�
 Agent Version、环境指针、Conversation 和 Message 都由数据库存储；内存实现继续作为
 快速单元测试 fixture。Conversation 使用 `(agent_version_id, workspace_id, agent_id)`
 复合外键固定同一 Workspace 内的真实版本，多轮消息按 `(created_at, id)` 稳定回放。
+
+敏感 Tool 会把当时的消息、有效 Tool Version 集合和剩余步骤固化为 checkpoint。
+A2UI action 只执行带身份与 Workspace 校验的审批状态迁移；后台 Approval Worker 从
+PostgreSQL 扫描已批准任务，通过 lease + fencing token 抢占执行，成功后 CAS 完成，
+失败按上限重试。HTTP 请求生命周期不会承载 Tool 副作用。

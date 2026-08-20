@@ -77,12 +77,13 @@ func main() {
 		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
 	})
 	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals)
+	approvalWorker := engine.NewApprovalWorker(approvals, runtime, "course-server-worker")
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
-			Agents: agents, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
-			Prompts: prompts, Profiles: profiles, Skills: skills,
+			Agents: agents, Approvals: approvals, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
+			Prompts: prompts, Profiles: profiles, Skills: skills, ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -93,6 +94,11 @@ func main() {
 		syscall.SIGTERM,
 	)
 	defer stop()
+	go func() {
+		if err := approvalWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("approval worker stopped: %v", err)
+		}
+	}()
 
 	go func() {
 		<-ctx.Done()

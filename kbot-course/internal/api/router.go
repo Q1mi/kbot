@@ -8,10 +8,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Q1mi/kbot/internal/a2ui"
 	"github.com/Q1mi/kbot/internal/api/middleware"
 	markdown "github.com/Q1mi/kbot/internal/connector/markdown_folder"
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/agent"
+	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -23,13 +25,15 @@ import (
 )
 
 type ControlPlane struct {
-	Agents   *agent.Service
-	Tools    *platformtool.Registry
-	KBs      *kb.Service
-	Search   *retriever.KnowledgeSearch
-	Prompts  *prompt.Service
-	Profiles *modelconfig.Registry
-	Skills   *skill.Service
+	Agents         *agent.Service
+	Approvals      *approval.Service
+	Tools          *platformtool.Registry
+	KBs            *kb.Service
+	Search         *retriever.KnowledgeSearch
+	Prompts        *prompt.Service
+	Profiles       *modelconfig.Registry
+	Skills         *skill.Service
+	ApprovalWorker interface{ Wake() }
 }
 
 type agentConfigRequest struct {
@@ -420,6 +424,54 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					return
 				}
 				writeJSON(w, http.StatusCreated, map[string]any{"skill": version, "version": version})
+			})
+		}
+		if control.Approvals != nil {
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/conversations/{conversationID}/a2ui/actions", func(w http.ResponseWriter, r *http.Request) {
+				var action a2ui.ActionRequest
+				if err := json.NewDecoder(r.Body).Decode(&action); err != nil || action.Version != a2ui.Version {
+					http.Error(w, "invalid A2UI action", http.StatusBadRequest)
+					return
+				}
+				if action.Action.Name != "approval.approve" && action.Action.Name != "approval.reject" {
+					http.Error(w, "A2UI action is not allowed", http.StatusBadRequest)
+					return
+				}
+				approvalID, _ := action.Action.Context["approval_id"].(string)
+				contextConversationID, _ := action.Action.Context["conversation_id"].(string)
+				contextSurfaceID, _ := action.Action.Context["surface_id"].(string)
+				conversationID := chi.URLParam(r, "conversationID")
+				workspaceID := middleware.WorkspaceID(r.Context())
+				request, err := control.Approvals.Get(r.Context(), workspaceID, approvalID)
+				expectedComponentID := "approval-reject"
+				if action.Action.Name == "approval.approve" {
+					expectedComponentID = "approval-approve"
+				}
+				if err != nil || request.RunID != conversationID || contextConversationID != conversationID ||
+					action.Action.SurfaceID != "approval-"+approvalID || contextSurfaceID != action.Action.SurfaceID ||
+					action.Action.SourceComponentID != expectedComponentID {
+					http.Error(w, "approval action binding does not match", http.StatusForbidden)
+					return
+				}
+				approved := action.Action.Name == "approval.approve"
+				if err := control.Approvals.Decide(r.Context(), workspaceID, approvalID, middleware.UserID(r.Context()), approved); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				status := "rejected"
+				if approved {
+					status = "approved"
+					if control.ApprovalWorker != nil {
+						control.ApprovalWorker.Wake()
+					}
+				}
+				message := a2ui.Message{Version: a2ui.Version, UpdateDataModel: &a2ui.UpdateDataModel{SurfaceID: action.Action.SurfaceID, Path: "/status", Value: status}}
+				if err := a2ui.Validate(message); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/a2ui+json")
+				_ = json.NewEncoder(w).Encode(message)
 			})
 		}
 		if runtime != nil {
