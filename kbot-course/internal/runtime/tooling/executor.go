@@ -52,6 +52,7 @@ type Binding struct {
 	KBScoped        bool
 	RestrictKBs     bool
 	AllowedKBs      []string
+	Sensitive       bool
 }
 
 type Executor struct {
@@ -251,6 +252,7 @@ func (e *Executor) Bind(ctx context.Context, workspaceID string, versionIDs []st
 			Info:            &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
 			RequiresNetwork: version.SourceType == "rest_api" || version.SourceType == "mcp_server" || version.SourceType == "a2a" || version.SourceType == "",
 			KBScoped:        version.SourceType == "internal_sdk" && version.Endpoint == "search_knowledge_base",
+			Sensitive:       version.Sensitive,
 		})
 	}
 	return bindings, nil

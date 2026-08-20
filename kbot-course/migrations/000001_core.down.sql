@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS approval_requests;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS conversations;
 DROP TABLE IF EXISTS agent_promotions;

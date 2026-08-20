@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -84,8 +85,18 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		}
 	}
 	messages = append(messages, schema.UserMessage(req.Message))
-	answer, streamed, err := e.runPlan(ctx, snapshot, plan, packages, messages, emit)
+	answer, streamed, err := e.runPlan(ctx, req.ConversationID, snapshot, plan, packages, messages, emit)
 	if err != nil {
+		var awaiting *AwaitingApprovalError
+		if errors.As(err, &awaiting) {
+			if emitErr := emitContext(ctx, emit, Event{Type: "approval_requested", Data: map[string]string{
+				"approval_id": awaiting.ApprovalID, "tool_name": awaiting.ToolName,
+				"tool_call_id": awaiting.ToolCallID, "tool_version_id": awaiting.ToolVersionID,
+			}}); emitErr != nil {
+				return emitErr
+			}
+			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "awaiting_approval"}})
+		}
 		_ = emitContext(ctx, emit, Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		return fmt.Errorf("generate: %w", err)
 	}
@@ -147,7 +158,7 @@ func (e *Engine) executionPlan(ctx context.Context, snapshot *AgentSnapshot) (*l
 }
 
 func (e *Engine) runPlan(
-	ctx context.Context, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
+	ctx context.Context, conversationID string, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
 	packages []platformskill.Package, messages []*schema.Message, emit Emitter,
 ) (*schema.Message, bool, error) {
 	if plan == nil || plan.Model == nil {
@@ -184,7 +195,8 @@ func (e *Engine) runPlan(
 		}
 		runner := NewADKRunner(plan.Model, e.tools, snapshot.WorkspaceID).
 			WithModelPolicy(plan.Retry, plan.Failover).
-			WithToolAuthorization(authorize)
+			WithToolAuthorization(authorize).
+			WithApprovals(e.approvals, conversationID)
 		if skillRuntime != nil {
 			runner.WithHandlers(skillRuntime.Handlers...)
 		}

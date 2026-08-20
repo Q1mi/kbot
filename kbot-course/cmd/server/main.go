@@ -14,6 +14,7 @@ import (
 	"github.com/Q1mi/kbot/internal/config"
 	postgresinfra "github.com/Q1mi/kbot/internal/infrastructure/postgres"
 	"github.com/Q1mi/kbot/internal/platform/agent"
+	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -52,6 +53,7 @@ func main() {
 	prompts := prompt.NewService()
 	profiles := modelconfig.NewRegistry([]byte(cfg.JWTSecret))
 	skills := skill.NewService()
+	approvals := approval.NewPostgresService(pool)
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -74,7 +76,7 @@ func main() {
 		body, marshalErr := json.Marshal(results)
 		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
 	})
-	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills)
+	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,

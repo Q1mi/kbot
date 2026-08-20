@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Q1mi/kbot/internal/config"
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
 	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
@@ -220,6 +222,55 @@ func TestChatStreamRunsPinnedRESTToolEndToEnd(t *testing.T) {
 	}
 	if got := strings.Join(events, ","); !strings.Contains(got, "tool_started,tool_finished") || !strings.Contains(got, "answer_done") {
 		t.Fatalf("events = %v", events)
+	}
+}
+
+func TestSensitiveToolPausesThroughEinoStatefulInterrupt(t *testing.T) {
+	var toolCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		toolCalls.Add(1)
+		_, _ = w.Write([]byte(`{"status":"submitted"}`))
+	}))
+	defer server.Close()
+	registry := platformtool.NewRegistry()
+	if err := registry.Register(t.Context(), platformtool.Version{
+		ID: "refund-v1", WorkspaceID: "ws-1", Name: "refund", Description: "submit refund",
+		Endpoint: server.URL, Published: true, Sensitive: true,
+		InputSchema: []byte(`{"type":"object","properties":{"order_id":{"type":"string"}},"required":["order_id"],"additionalProperties":false}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots: map[string]*AgentSnapshot{"v1": {
+			ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "help", MaxSteps: 4,
+			ToolVersionIDs: []string{"refund-v1"},
+		}},
+	}
+	approvals := approval.NewService()
+	runtime := New(controlPlane, &sequenceChatModel{}).
+		WithTools(tooling.NewExecutor(registry, server.Client(), "127.0.0.1")).
+		WithApprovals(approvals)
+	var approvalID, status string
+	if err := runtime.ChatStream(t.Context(), ChatRequest{
+		ConversationID: "c1", WorkspaceID: "ws-1", Message: "refund",
+	}, func(event Event) error {
+		switch event.Type {
+		case "approval_requested":
+			approvalID = event.Data.(map[string]string)["approval_id"]
+		case "run_finished":
+			status = event.Data.(map[string]string)["status"]
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if toolCalls.Load() != 0 || approvalID == "" || status != "awaiting_approval" {
+		t.Fatalf("toolCalls=%d approval=%q status=%q", toolCalls.Load(), approvalID, status)
+	}
+	request, err := approvals.Get(t.Context(), "ws-1", approvalID)
+	if err != nil || request.ToolCallID != "call-1" || request.ToolVersionID != "refund-v1" || len(request.Checkpoint) == 0 {
+		t.Fatalf("approval request = %#v, err = %v", request, err)
 	}
 }
 

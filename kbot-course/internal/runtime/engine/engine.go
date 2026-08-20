@@ -38,13 +38,14 @@ type executionPlanner interface {
 }
 
 type Engine struct {
-	platform Platform
-	model    model.BaseChatModel
-	planner  executionPlanner
-	tools    ToolRuntime
-	prompts  PromptRenderer
-	profiles ModelProfileResolver
-	skills   SkillResolver
+	platform  Platform
+	model     model.BaseChatModel
+	planner   executionPlanner
+	tools     ToolRuntime
+	prompts   PromptRenderer
+	profiles  ModelProfileResolver
+	skills    SkillResolver
+	approvals ApprovalGate
 }
 
 type ToolRuntime interface {
@@ -87,6 +88,11 @@ func (e *Engine) WithRuntimeConfig(prompts PromptRenderer, profiles ModelProfile
 
 func (e *Engine) WithSkills(skills SkillResolver) *Engine {
 	e.skills = skills
+	return e
+}
+
+func (e *Engine) WithApprovals(approvals ApprovalGate) *Engine {
+	e.approvals = approvals
 	return e
 }
 
