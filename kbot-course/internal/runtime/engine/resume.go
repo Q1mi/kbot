@@ -46,6 +46,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 	if err != nil {
 		return err
 	}
+	plan = e.guardExecutionPlan(plan, request.WorkspaceID)
 	packages, err := e.resolveSkills(ctx, snapshot)
 	if err != nil {
 		return err
@@ -94,6 +95,16 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "awaiting_approval"}})
 		}
 		return fmt.Errorf("resume Eino approval checkpoint: %w", err)
+	}
+	if e.guard != nil {
+		decision, guardErr := e.guard.Evaluate(ctx, request.WorkspaceID, "on_output", answer.Content)
+		if guardErr != nil {
+			return fmt.Errorf("evaluate resumed output guard: %w", guardErr)
+		}
+		if !decision.Allowed {
+			return fmt.Errorf("resumed output blocked by guard")
+		}
+		answer.Content = decision.SanitizedText
 	}
 	if history, ok := e.platform.(ConversationMessageStore); ok {
 		if err := history.AppendMessage(ctx, request.WorkspaceID, request.RunID, "assistant", answer.Content); err != nil {

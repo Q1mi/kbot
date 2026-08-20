@@ -10,6 +10,7 @@ import (
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/skill"
+	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
@@ -46,6 +47,7 @@ type Engine struct {
 	profiles  ModelProfileResolver
 	skills    SkillResolver
 	approvals ApprovalGate
+	guard     RuntimeGuard
 }
 
 type ToolRuntime interface {
@@ -68,6 +70,10 @@ type SkillResolver interface {
 type ConversationMessageStore interface {
 	ListMessages(ctx context.Context, workspaceID, conversationID string) ([]domain.Message, error)
 	AppendMessage(ctx context.Context, workspaceID, conversationID, role, content string) error
+}
+
+type RuntimeGuard interface {
+	Evaluate(ctx context.Context, workspaceID, hook, text string) (guard.Decision, error)
 }
 
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
@@ -93,6 +99,11 @@ func (e *Engine) WithSkills(skills SkillResolver) *Engine {
 
 func (e *Engine) WithApprovals(approvals ApprovalGate) *Engine {
 	e.approvals = approvals
+	return e
+}
+
+func (e *Engine) WithGuard(runtimeGuard RuntimeGuard) *Engine {
+	e.guard = runtimeGuard
 	return e
 }
 

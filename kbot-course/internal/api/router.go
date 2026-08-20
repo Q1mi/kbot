@@ -21,6 +21,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/skill"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
+	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/retriever"
 )
 
@@ -33,6 +34,7 @@ type ControlPlane struct {
 	Prompts        *prompt.Service
 	Profiles       *modelconfig.Registry
 	Skills         *skill.Service
+	Guard          *guard.Service
 	ApprovalWorker interface{ Wake() }
 }
 
@@ -472,6 +474,55 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				}
 				w.Header().Set("Content-Type", "application/a2ui+json")
 				_ = json.NewEncoder(w).Encode(message)
+			})
+		}
+		if control.Guard != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/guard/rules", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Guard.List(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/guard/rules", func(w http.ResponseWriter, r *http.Request) {
+				var rule guard.RuleConfig
+				if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				created, err := control.Guard.Create(r.Context(), middleware.WorkspaceID(r.Context()), rule)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, created)
+			})
+			protected.With(middleware.Workspace(iamService)).Put("/api/v1/guard/rules/{ruleID}", func(w http.ResponseWriter, r *http.Request) {
+				var rule guard.RuleConfig
+				if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				updated, err := control.Guard.Update(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "ruleID"), rule)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, updated)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/guard/quotas", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Guard.ListQuotas(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Put("/api/v1/guard/quotas/{metric}", func(w http.ResponseWriter, r *http.Request) {
+				var input struct {
+					Limit int64 `json:"limit"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				quota, err := control.Guard.SetQuota(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "metric"), input.Limit)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, quota)
 			})
 		}
 		if runtime != nil {

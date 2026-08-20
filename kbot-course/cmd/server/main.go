@@ -22,6 +22,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/skill"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
+	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/retriever"
 	"github.com/Q1mi/kbot/internal/runtime/sandbox"
@@ -54,6 +55,7 @@ func main() {
 	profiles := modelconfig.NewRegistry([]byte(cfg.JWTSecret))
 	skills := skill.NewService()
 	approvals := approval.NewPostgresService(pool)
+	guards := guard.NewService(guard.NewPipeline(guard.MaxLengthRule{MaxRunes: 8000}, guard.InjectionRule{}, guard.PIIRule{}))
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -76,14 +78,14 @@ func main() {
 		body, marshalErr := json.Marshal(results)
 		return tooling.Result{StatusCode: http.StatusOK, Body: body}, marshalErr
 	})
-	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals)
+	runtime.WithTools(toolExecutor).WithRuntimeConfig(prompts, profiles).WithSkills(skills).WithApprovals(approvals).WithGuard(guards)
 	approvalWorker := engine.NewApprovalWorker(approvals, runtime, "course-server-worker")
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
 			Agents: agents, Approvals: approvals, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
-			Prompts: prompts, Profiles: profiles, Skills: skills, ApprovalWorker: approvalWorker,
+			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards, ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
