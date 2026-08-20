@@ -14,6 +14,7 @@ import (
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform"
 	"github.com/Q1mi/kbot/internal/platform/iam"
+	"github.com/Q1mi/kbot/internal/platform/kb"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
@@ -36,6 +37,7 @@ func main() {
 	controlPlane.PutConversation(&domain.Conversation{ID: "demo-conversation", AgentID: "demo", AgentVersionID: "demo-v1"})
 	runtime := engine.New(controlPlane, gateway)
 	toolRegistry := platformtool.NewRegistry()
+	knowledgeBases := kb.NewService()
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -45,7 +47,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{Tools: toolRegistry}),
+		Handler:           api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{Tools: toolRegistry, KBs: knowledgeBases}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

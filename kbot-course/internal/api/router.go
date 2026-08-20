@@ -9,12 +9,15 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Q1mi/kbot/internal/api/middleware"
+	markdown "github.com/Q1mi/kbot/internal/connector/markdown_folder"
 	"github.com/Q1mi/kbot/internal/platform/iam"
+	"github.com/Q1mi/kbot/internal/platform/kb"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 )
 
 type ControlPlane struct {
 	Tools *platformtool.Registry
+	KBs   *kb.Service
 }
 
 func NewRouter(iamService *iam.Service, runtimes ...ChatRuntime) http.Handler {
@@ -110,6 +113,49 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					return
 				}
 				writeJSON(w, http.StatusCreated, version)
+			})
+		}
+		if control.KBs != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/kbs", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.KBs.List(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/kbs", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Name string `json:"name"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				base, err := control.KBs.Create(r.Context(), middleware.WorkspaceID(r.Context()), req.Name)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, base)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/kbs/{kbID}/connectors/markdown/sync", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					RootPath string `json:"root_path"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				job, err := control.KBs.Sync(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "kbID"), markdown.New(req.RootPath))
+				if err != nil {
+					writeJSON(w, http.StatusUnprocessableEntity, job)
+					return
+				}
+				writeJSON(w, http.StatusAccepted, job)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/kbs/{kbID}/documents", func(w http.ResponseWriter, r *http.Request) {
+				documents, err := control.KBs.Documents(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "kbID"))
+				if err != nil {
+					http.Error(w, "knowledge base not found", http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, documents)
 			})
 		}
 		if runtime != nil {
