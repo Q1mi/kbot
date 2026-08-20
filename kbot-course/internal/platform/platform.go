@@ -1,14 +1,63 @@
 // Package platform 是 Agent 控制面。
-//
-// 控制面负责配置、版本和发布。后续课程会逐步在这里加入 IAM、
-// Tool、Prompt、Skill、知识库、Agent 和评测等服务。
 package platform
 
-// Platform 是控制面服务的装配入口。
-// 当前课程先建立分层，具体服务会在后续版本中逐步加入。
-type Platform struct{}
+import (
+	"context"
+	"fmt"
+	"sync"
 
-// New 创建控制面。
-func New() *Platform {
-	return &Platform{}
+	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/runtime/engine"
+)
+
+// Platform 是课程前半段使用的内存控制面，便于聚焦运行链路。
+type Platform struct {
+	mu            sync.RWMutex
+	conversations map[string]*domain.Conversation
+	snapshots     map[string]*engine.AgentSnapshot
 }
+
+func New() *Platform {
+	return &Platform{
+		conversations: make(map[string]*domain.Conversation),
+		snapshots:     make(map[string]*engine.AgentSnapshot),
+	}
+}
+
+func (p *Platform) PutConversation(conversation *domain.Conversation) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	copy := *conversation
+	p.conversations[copy.ID] = &copy
+}
+
+func (p *Platform) PutSnapshot(snapshot *engine.AgentSnapshot) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	copy := *snapshot
+	p.snapshots[copy.ID] = &copy
+}
+
+func (p *Platform) LoadConversation(_ context.Context, id string) (*domain.Conversation, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	conversation, ok := p.conversations[id]
+	if !ok {
+		return nil, fmt.Errorf("conversation %s not found", id)
+	}
+	copy := *conversation
+	return &copy, nil
+}
+
+func (p *Platform) GetAgentSnapshotByVersion(_ context.Context, id string) (*engine.AgentSnapshot, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	snapshot, ok := p.snapshots[id]
+	if !ok {
+		return nil, fmt.Errorf("agent snapshot %s not found", id)
+	}
+	copy := *snapshot
+	return &copy, nil
+}
+
+var _ engine.Platform = (*Platform)(nil)

@@ -10,7 +10,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/iam"
 )
 
-func NewRouter(iamService *iam.Service) http.Handler {
+func NewRouter(iamService *iam.Service, runtimes ...ChatRuntime) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer, middleware.RequestID)
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -60,6 +60,9 @@ func NewRouter(iamService *iam.Service) http.Handler {
 				"role":         middleware.WorkspaceRole(r.Context()),
 			})
 		})
+		if len(runtimes) > 0 && runtimes[0] != nil {
+			protected.With(middleware.Workspace(iamService)).Post("/stream/agents/{agentID}/chat", NewStreamHandler(runtimes[0]).ServeHTTP)
+		}
 	})
 	return router
 }

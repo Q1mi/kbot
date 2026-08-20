@@ -11,7 +11,10 @@ import (
 
 	"github.com/Q1mi/kbot/internal/api"
 	"github.com/Q1mi/kbot/internal/config"
+	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/platform"
 	"github.com/Q1mi/kbot/internal/platform/iam"
+	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 )
 
@@ -21,13 +24,18 @@ func main() {
 		log.Fatal(err)
 	}
 	iamService := iam.New(iam.NewMemoryStore(), cfg.JWTSecret, cfg.JWTIssuer)
-	if _, err := llm.NewGateway(cfg); err != nil {
+	gateway, err := llm.NewGateway(cfg)
+	if err != nil {
 		log.Fatalf("create LLM gateway: %v", err)
 	}
+	controlPlane := platform.New()
+	controlPlane.PutSnapshot(&engine.AgentSnapshot{ID: "demo-v1", AgentID: "demo", SystemPrompt: "你是 kbot 课堂助手。", MaxSteps: 4})
+	controlPlane.PutConversation(&domain.Conversation{ID: "demo-conversation", AgentID: "demo", AgentVersionID: "demo-v1"})
+	runtime := engine.New(controlPlane, gateway)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouter(iamService),
+		Handler:           api.NewRouter(iamService, runtime),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

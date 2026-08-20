@@ -48,3 +48,12 @@ type Conversation struct {
 	UserID         string
 	CreatedAt      time.Time
 }
+
+// Message 是会话中的持久化消息。
+type Message struct {
+	ID             string
+	ConversationID string
+	Role           string
+	Content        string
+	CreatedAt      time.Time
+}
