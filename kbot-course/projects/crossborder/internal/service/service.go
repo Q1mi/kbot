@@ -19,12 +19,12 @@ var (
 )
 
 type TransferRequest struct {
-	SKU            string
-	FromWarehouse  string
-	ToWarehouse    string
-	IdempotencyKey string
-	Quantity       int
-	DryRun         bool
+	SKU            string `json:"sku"`
+	FromWarehouse  string `json:"from_warehouse"`
+	ToWarehouse    string `json:"to_warehouse"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Quantity       int    `json:"quantity"`
+	DryRun         bool   `json:"dry_run"`
 }
 
 type Service struct {

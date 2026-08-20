@@ -38,6 +38,12 @@
         "dry_run": {"type": "boolean"}
       },
       "required": ["sku", "from_warehouse", "to_warehouse", "quantity", "idempotency_key"]
+      ,
+      "x-kbot-approval": {
+        "title": "库存调拨审批",
+        "summary_fields": ["sku", "from_warehouse", "to_warehouse", "quantity"],
+        "confirm_label": "批准并执行"
+      }
     }
   }
 ]
