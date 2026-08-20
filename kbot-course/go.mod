@@ -2,7 +2,12 @@ module github.com/Q1mi/kbot
 
 go 1.26.6
 
-require github.com/cloudwego/eino v0.8.13
+require (
+	github.com/cloudwego/eino v0.8.13
+	github.com/go-chi/chi/v5 v5.3.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
+	golang.org/x/crypto v0.53.0
+)
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -28,7 +33,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	golang.org/x/arch v0.11.0 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -8,20 +8,22 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Q1mi/kbot/internal/api"
+	"github.com/Q1mi/kbot/internal/config"
+	"github.com/Q1mi/kbot/internal/platform/iam"
 )
 
 func main() {
-	// 后续课程会按 infrastructure → platform → runtime → API 的顺序
-	// 在这里装配依赖。当前版本先保留最小 HTTP 服务。
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
+	iamService := iam.New(iam.NewMemoryStore(), cfg.JWTSecret, cfg.JWTIssuer)
 
 	server := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
+		Addr:              cfg.HTTPAddr,
+		Handler:           api.NewRouter(iamService),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -44,7 +46,7 @@ func main() {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	log.Println("server listening on :8080")
+	log.Printf("server listening on %s", cfg.HTTPAddr)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
