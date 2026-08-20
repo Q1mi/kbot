@@ -40,3 +40,10 @@ allowlist、拨号前 DNS/IP 解析和同源重定向约束；Tool 凭据以 AES
 API 只暴露 `has_auth`，Runtime 解析固定版本后才取得凭据并写入受限 Header。
 Docker Socket 权限很高，课堂与开发环境应限制 Runner 的网络入口；生产环境可以在
 保持内部 HTTP 契约的前提下换用 gVisor、Kata Containers 或 Kubernetes 沙箱后端。
+
+## PostgreSQL 主路径
+
+第 15 课起，Server 启动时必须连接 PostgreSQL。用户、Workspace 成员、Agent、不可变
+Agent Version、环境指针、Conversation 和 Message 都由数据库存储；内存实现继续作为
+快速单元测试 fixture。Conversation 使用 `(agent_version_id, workspace_id, agent_id)`
+复合外键固定同一 Workspace 内的真实版本，多轮消息按 `(created_at, id)` 稳定回放。

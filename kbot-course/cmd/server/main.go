@@ -12,6 +12,7 @@ import (
 
 	"github.com/Q1mi/kbot/internal/api"
 	"github.com/Q1mi/kbot/internal/config"
+	postgresinfra "github.com/Q1mi/kbot/internal/infrastructure/postgres"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
@@ -31,12 +32,19 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
-	iamService := iam.New(iam.NewMemoryStore(), cfg.JWTSecret, cfg.JWTIssuer)
+	databaseContext, databaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	pool, err := postgresinfra.Open(databaseContext, cfg.DatabaseURL)
+	databaseCancel()
+	if err != nil {
+		log.Fatalf("connect PostgreSQL: %v", err)
+	}
+	defer pool.Close()
+	iamService := iam.New(iam.NewPostgresStore(pool), cfg.JWTSecret, cfg.JWTIssuer)
 	gateway, err := llm.NewGateway(cfg)
 	if err != nil {
 		log.Fatalf("create LLM gateway: %v", err)
 	}
-	agents := agent.NewService()
+	agents := agent.NewPostgresService(pool)
 	runtime := engine.New(agents, gateway)
 	toolRegistry := platformtool.NewRegistry()
 	knowledgeBases := kb.NewService()

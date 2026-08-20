@@ -20,6 +20,7 @@ type Service struct {
 	promotions    map[string]string
 	conversations map[string]domain.Conversation
 	messages      map[string][]domain.Message
+	postgres      *postgresStore
 	sequence      atomic.Uint64
 }
 
@@ -40,7 +41,10 @@ func NewService() *Service {
 	}
 }
 
-func (s *Service) CreateAgent(_ context.Context, workspaceID, name, template string) (*Agent, error) {
+func (s *Service) CreateAgent(ctx context.Context, workspaceID, name, template string) (*Agent, error) {
+	if s.postgres != nil {
+		return s.postgres.createAgent(ctx, workspaceID, name, template)
+	}
 	if workspaceID == "" || name == "" {
 		return nil, fmt.Errorf("workspace and agent name are required")
 	}
@@ -51,7 +55,11 @@ func (s *Service) CreateAgent(_ context.Context, workspaceID, name, template str
 	return &agent, nil
 }
 
-func (s *Service) ListAgents(_ context.Context, workspaceID string) []Agent {
+func (s *Service) ListAgents(ctx context.Context, workspaceID string) []Agent {
+	if s.postgres != nil {
+		result, _ := s.postgres.listAgents(ctx, workspaceID)
+		return result
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]Agent, 0, len(s.agents))
@@ -63,7 +71,10 @@ func (s *Service) ListAgents(_ context.Context, workspaceID string) []Agent {
 	return result
 }
 
-func (s *Service) GetAgent(_ context.Context, workspaceID, agentID string) (Agent, error) {
+func (s *Service) GetAgent(ctx context.Context, workspaceID, agentID string) (Agent, error) {
+	if s.postgres != nil {
+		return s.postgres.getAgent(ctx, workspaceID, agentID)
+	}
 	s.mu.RLock()
 	item, ok := s.agents[agentID]
 	s.mu.RUnlock()
@@ -73,12 +84,15 @@ func (s *Service) GetAgent(_ context.Context, workspaceID, agentID string) (Agen
 	return item, nil
 }
 
-func (s *Service) Publish(_ context.Context, version domain.AgentVersion, snapshot engine.AgentSnapshot) error {
+func (s *Service) Publish(ctx context.Context, version domain.AgentVersion, snapshot engine.AgentSnapshot) error {
 	if version.ID == "" || version.AgentID == "" || version.WorkspaceID == "" {
 		return fmt.Errorf("version id, agent and workspace are required")
 	}
 	if snapshot.ID != version.ID || snapshot.AgentID != version.AgentID || snapshot.WorkspaceID != version.WorkspaceID {
 		return fmt.Errorf("snapshot identity must match agent version")
+	}
+	if s.postgres != nil {
+		return s.postgres.publish(ctx, version, snapshot)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,7 +104,10 @@ func (s *Service) Publish(_ context.Context, version domain.AgentVersion, snapsh
 	return nil
 }
 
-func (s *Service) Promote(_ context.Context, workspaceID, agentID, environment, versionID string) error {
+func (s *Service) Promote(ctx context.Context, workspaceID, agentID, environment, versionID string) error {
+	if s.postgres != nil {
+		return s.postgres.promote(ctx, workspaceID, agentID, environment, versionID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	version, ok := s.versions[versionID]
@@ -101,7 +118,10 @@ func (s *Service) Promote(_ context.Context, workspaceID, agentID, environment, 
 	return nil
 }
 
-func (s *Service) CreateConversation(_ context.Context, workspaceID, agentID, environment, userID string) (*domain.Conversation, error) {
+func (s *Service) CreateConversation(ctx context.Context, workspaceID, agentID, environment, userID string) (*domain.Conversation, error) {
+	if s.postgres != nil {
+		return s.postgres.createConversation(ctx, workspaceID, agentID, environment, userID)
+	}
 	s.mu.RLock()
 	versionID, ok := s.promotions[promotionKey(workspaceID, agentID, environment)]
 	s.mu.RUnlock()
@@ -115,7 +135,10 @@ func (s *Service) CreateConversation(_ context.Context, workspaceID, agentID, en
 	return &conversation, nil
 }
 
-func (s *Service) Snapshot(_ context.Context, workspaceID, versionID string) (*engine.AgentSnapshot, error) {
+func (s *Service) Snapshot(ctx context.Context, workspaceID, versionID string) (*engine.AgentSnapshot, error) {
+	if s.postgres != nil {
+		return s.postgres.snapshot(ctx, workspaceID, versionID)
+	}
 	s.mu.RLock()
 	snapshot, ok := s.snapshots[versionID]
 	s.mu.RUnlock()
@@ -126,7 +149,10 @@ func (s *Service) Snapshot(_ context.Context, workspaceID, versionID string) (*e
 	return &copy, nil
 }
 
-func (s *Service) LoadConversation(_ context.Context, conversationID string) (*domain.Conversation, error) {
+func (s *Service) LoadConversation(ctx context.Context, conversationID string) (*domain.Conversation, error) {
+	if s.postgres != nil {
+		return s.postgres.loadConversation(ctx, conversationID)
+	}
 	s.mu.RLock()
 	conversation, ok := s.conversations[conversationID]
 	s.mu.RUnlock()
@@ -150,7 +176,10 @@ func (s *Service) ResolveConversation(ctx context.Context, workspaceID, userID, 
 	return conversation, nil
 }
 
-func (s *Service) GetAgentSnapshotByVersion(_ context.Context, versionID string) (*engine.AgentSnapshot, error) {
+func (s *Service) GetAgentSnapshotByVersion(ctx context.Context, versionID string) (*engine.AgentSnapshot, error) {
+	if s.postgres != nil {
+		return s.postgres.snapshot(ctx, "", versionID)
+	}
 	s.mu.RLock()
 	snapshot, ok := s.snapshots[versionID]
 	s.mu.RUnlock()
@@ -161,7 +190,11 @@ func (s *Service) GetAgentSnapshotByVersion(_ context.Context, versionID string)
 	return &copy, nil
 }
 
-func (s *Service) ListVersions(_ context.Context, workspaceID, agentID string) []domain.AgentVersion {
+func (s *Service) ListVersions(ctx context.Context, workspaceID, agentID string) []domain.AgentVersion {
+	if s.postgres != nil {
+		result, _ := s.postgres.listVersions(ctx, workspaceID, agentID)
+		return result
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]domain.AgentVersion, 0)
@@ -173,7 +206,11 @@ func (s *Service) ListVersions(_ context.Context, workspaceID, agentID string) [
 	return result
 }
 
-func (s *Service) ListConversations(_ context.Context, workspaceID, agentID string) []domain.Conversation {
+func (s *Service) ListConversations(ctx context.Context, workspaceID, agentID string) []domain.Conversation {
+	if s.postgres != nil {
+		result, _ := s.postgres.listConversations(ctx, workspaceID, agentID)
+		return result
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]domain.Conversation, 0)
@@ -185,7 +222,10 @@ func (s *Service) ListConversations(_ context.Context, workspaceID, agentID stri
 	return result
 }
 
-func (s *Service) ListMessages(_ context.Context, workspaceID, conversationID string) ([]domain.Message, error) {
+func (s *Service) ListMessages(ctx context.Context, workspaceID, conversationID string) ([]domain.Message, error) {
+	if s.postgres != nil {
+		return s.postgres.listMessages(ctx, workspaceID, conversationID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	conversation, ok := s.conversations[conversationID]
@@ -195,12 +235,15 @@ func (s *Service) ListMessages(_ context.Context, workspaceID, conversationID st
 	return append([]domain.Message(nil), s.messages[conversationID]...), nil
 }
 
-func (s *Service) AppendMessage(_ context.Context, workspaceID, conversationID, role, content string) error {
+func (s *Service) AppendMessage(ctx context.Context, workspaceID, conversationID, role, content string) error {
 	if role != "user" && role != "assistant" {
 		return fmt.Errorf("message role %q is not supported", role)
 	}
 	if content == "" {
 		return fmt.Errorf("message content is required")
+	}
+	if s.postgres != nil {
+		return s.postgres.appendMessage(ctx, workspaceID, conversationID, role, content)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
