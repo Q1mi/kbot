@@ -14,6 +14,7 @@ import (
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
+	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
@@ -22,6 +23,44 @@ import (
 )
 
 type replyChatModel struct{ answer string }
+
+type skillCallingChatModel struct {
+	calls         int
+	sawSkillBody  bool
+	sawToolResult bool
+}
+
+func (m *skillCallingChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	m.calls++
+	for _, message := range messages {
+		if strings.Contains(message.Content, "退款流程正文") {
+			m.sawSkillBody = true
+		}
+		if message.Role == schema.Tool && strings.Contains(message.Content, "submitted") {
+			m.sawToolResult = true
+		}
+	}
+	switch m.calls {
+	case 1:
+		return schema.AssistantMessage("", []schema.ToolCall{{
+			ID: "skill-1", Type: "function", Function: schema.FunctionCall{Name: "skill", Arguments: `{"skill":"refund-flow"}`},
+		}}), nil
+	case 2:
+		return schema.AssistantMessage("", []schema.ToolCall{{
+			ID: "refund-1", Type: "function", Function: schema.FunctionCall{Name: "refund", Arguments: `{"order_id":"ORD-1"}`},
+		}}), nil
+	default:
+		return schema.AssistantMessage("退款已提交", nil), nil
+	}
+}
+
+func (m *skillCallingChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := m.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
+}
 
 func (g replyChatModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
 	answer := g.answer
@@ -148,6 +187,67 @@ func TestChatStreamRunsPinnedRESTToolEndToEnd(t *testing.T) {
 	if got := strings.Join(events, ","); !strings.Contains(got, "tool_started,tool_finished") || !strings.Contains(got, "answer_done") {
 		t.Fatalf("events = %v", events)
 	}
+}
+
+func TestChatStreamActivatesSkillThroughEinoMiddleware(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"submitted"}`))
+	}))
+	defer server.Close()
+	tools := platformtool.NewRegistry()
+	if err := tools.Register(t.Context(), platformtool.Version{
+		ID: "refund-v1", WorkspaceID: "ws-1", Name: "refund", Description: "submit refund",
+		Endpoint: server.URL, Published: true,
+		InputSchema: []byte(`{"type":"object","properties":{"order_id":{"type":"string"}},"required":["order_id"],"additionalProperties":false}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	skills := platformskill.NewService()
+	if _, err := skills.Publish(t.Context(), "refund-skill-v1", "ws-1", []byte(`---
+name: refund-flow
+description: 处理退款
+allowed-tools: [refund]
+requires_network: true
+max-steps: 4
+---
+退款流程正文`)); err != nil {
+		t.Fatal(err)
+	}
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots: map[string]*AgentSnapshot{"v1": {
+			ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "help", MaxSteps: 6,
+			ToolVersionIDs: []string{"refund-v1"}, SkillVersionIDs: []string{"refund-skill-v1"},
+		}},
+	}
+	chatModel := &skillCallingChatModel{}
+	runtime := New(controlPlane, chatModel).
+		WithTools(tooling.NewExecutor(tools, server.Client(), "127.0.0.1")).
+		WithSkills(skills)
+	var events []string
+	if err := runtime.ChatStream(t.Context(), ChatRequest{
+		ConversationID: "c1", WorkspaceID: "ws-1", Message: "帮我退款",
+	}, func(event Event) error {
+		events = append(events, event.Type)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !chatModel.sawSkillBody || !chatModel.sawToolResult {
+		t.Fatalf("saw skill=%v tool=%v", chatModel.sawSkillBody, chatModel.sawToolResult)
+	}
+	if !containsEvent(events, "skill_trigger") {
+		t.Fatalf("events = %v", events)
+	}
+}
+
+func containsEvent(events []string, want string) bool {
+	for _, event := range events {
+		if event == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestChatStreamEmitsIncrementalAnswerDeltas(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
+	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
+	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
 )
 
 type ChatRequest struct {
@@ -53,13 +55,17 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 			return fmt.Errorf("render pinned system prompt: %w", err)
 		}
 	}
+	packages, err := e.resolveSkills(ctx, snapshot)
+	if err != nil {
+		return err
+	}
 	if err := emitContext(ctx, emit, Event{Type: "run_started", Data: map[string]string{
 		"conversation_id": req.ConversationID, "agent_version_id": snapshot.ID,
 	}}); err != nil {
 		return err
 	}
 	messages := []*schema.Message{schema.SystemMessage(systemPrompt), schema.UserMessage(req.Message)}
-	answer, streamed, err := e.runPlan(ctx, snapshot, plan, messages, emit)
+	answer, streamed, err := e.runPlan(ctx, snapshot, plan, packages, messages, emit)
 	if err != nil {
 		_ = emitContext(ctx, emit, Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		return fmt.Errorf("generate: %w", err)
@@ -75,6 +81,24 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		return err
 	}
 	return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
+}
+
+func (e *Engine) resolveSkills(ctx context.Context, snapshot *AgentSnapshot) ([]platformskill.Package, error) {
+	if len(snapshot.SkillVersionIDs) == 0 {
+		return nil, nil
+	}
+	if e.skills == nil {
+		return nil, fmt.Errorf("skill resolver is required by the pinned snapshot")
+	}
+	packages := make([]platformskill.Package, 0, len(snapshot.SkillVersionIDs))
+	for _, versionID := range snapshot.SkillVersionIDs {
+		version, err := e.skills.Resolve(ctx, snapshot.WorkspaceID, versionID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve pinned skill %s: %w", versionID, err)
+		}
+		packages = append(packages, version.Package)
+	}
+	return packages, nil
 }
 
 func (e *Engine) executionPlan(ctx context.Context, snapshot *AgentSnapshot) (*llm.ExecutionPlan, error) {
@@ -100,7 +124,7 @@ func (e *Engine) executionPlan(ctx context.Context, snapshot *AgentSnapshot) (*l
 
 func (e *Engine) runPlan(
 	ctx context.Context, snapshot *AgentSnapshot, plan *llm.ExecutionPlan,
-	messages []*schema.Message, emit Emitter,
+	packages []platformskill.Package, messages []*schema.Message, emit Emitter,
 ) (*schema.Message, bool, error) {
 	if plan == nil || plan.Model == nil {
 		return nil, false, fmt.Errorf("execution plan model is required")
@@ -116,10 +140,31 @@ func (e *Engine) runPlan(
 			return nil, false, fmt.Errorf("bind pinned tools: %w", err)
 		}
 	}
-	if len(bindings) > 0 || plan.Retry != nil || plan.Failover != nil {
-		answer, err := NewADKRunner(plan.Model, e.tools, snapshot.WorkspaceID).
+	skillRuntime, err := skillrunner.NewRuntime(ctx, packages, bindings, messages[len(messages)-1].Content, func(pkg platformskill.Package) error {
+		return emitContext(ctx, emit, Event{Type: "skill_trigger", Data: map[string]string{"name": pkg.Name}})
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if skillRuntime != nil && skillRuntime.ExplicitName != "" {
+		messages[0].Content += fmt.Sprintf("\n\n用户已显式选择 Skill %q；请先调用 skill 工具加载完整说明。", skillRuntime.ExplicitName)
+	}
+	if len(bindings) > 0 || plan.Retry != nil || plan.Failover != nil || skillRuntime != nil {
+		maxSteps := snapshot.MaxSteps
+		if maxSteps <= 0 {
+			maxSteps = 4
+		}
+		var authorize func(string, string) error
+		if skillRuntime != nil {
+			authorize = skillRuntime.Authorize
+		}
+		runner := NewADKRunner(plan.Model, e.tools, snapshot.WorkspaceID).
 			WithModelPolicy(plan.Retry, plan.Failover).
-			Run(ctx, messages, bindings, snapshot.MaxSteps, emit)
+			WithToolAuthorization(authorize)
+		if skillRuntime != nil {
+			runner.WithHandlers(skillRuntime.Handlers...)
+		}
+		answer, err := runner.Run(ctx, messages, bindings, maxSteps, emit)
 		return answer, false, err
 	}
 	stream, err := plan.Model.Stream(ctx, messages)

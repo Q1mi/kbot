@@ -14,6 +14,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 	"github.com/Q1mi/kbot/internal/platform/prompt"
+	"github.com/Q1mi/kbot/internal/platform/skill"
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/retriever"
 )
@@ -24,6 +25,7 @@ type ControlPlane struct {
 	Search   *retriever.KnowledgeSearch
 	Prompts  *prompt.Service
 	Profiles *modelconfig.Registry
+	Skills   *skill.Service
 }
 
 func NewRouter(iamService *iam.Service, runtimes ...ChatRuntime) http.Handler {
@@ -248,6 +250,26 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 					return
 				}
 				writeJSON(w, http.StatusCreated, map[string]any{"profile": profile, "version": profile})
+			})
+		}
+		if control.Skills != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, control.Skills.List(r.Context(), middleware.WorkspaceID(r.Context())))
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/skills", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					SkillMD string `json:"skill_md"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				version, err := control.Skills.Publish(r.Context(), fmt.Sprintf("skill-version-%d", time.Now().UnixNano()), middleware.WorkspaceID(r.Context()), []byte(req.SkillMD))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, map[string]any{"skill": version, "version": version})
 			})
 		}
 		if runtime != nil {

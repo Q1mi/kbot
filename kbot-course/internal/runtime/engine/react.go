@@ -25,6 +25,8 @@ type ADKRunner struct {
 	workspaceID string
 	retry       *adk.ModelRetryConfig
 	failover    *adk.ModelFailoverConfig[*schema.Message]
+	handlers    []adk.ChatModelAgentMiddleware
+	authorize   func(name, arguments string) error
 }
 
 func NewADKRunner(chatModel model.BaseChatModel, executor ToolExecutor, workspaceID string) *ADKRunner {
@@ -35,6 +37,16 @@ func (r *ADKRunner) WithModelPolicy(
 	retry *adk.ModelRetryConfig, failover *adk.ModelFailoverConfig[*schema.Message],
 ) *ADKRunner {
 	r.retry, r.failover = retry, failover
+	return r
+}
+
+func (r *ADKRunner) WithHandlers(handlers ...adk.ChatModelAgentMiddleware) *ADKRunner {
+	r.handlers = append(r.handlers, handlers...)
+	return r
+}
+
+func (r *ADKRunner) WithToolAuthorization(authorize func(name, arguments string) error) *ADKRunner {
+	r.authorize = authorize
 	return r
 }
 
@@ -55,9 +67,10 @@ func (r *ADKRunner) Run(
 		Name: "course_agent", Description: "kbot course agent", Model: r.model,
 		ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{
 			Tools: tools, ExecuteSequentially: true,
-			ToolCallMiddlewares: []compose.ToolMiddleware{toolEventMiddleware(emit)},
+			ToolCallMiddlewares: []compose.ToolMiddleware{toolEventMiddleware(emit, r.authorize)},
 		}},
 		MaxIterations:       maxSteps,
+		Handlers:            r.handlers,
 		ModelRetryConfig:    r.retry,
 		ModelFailoverConfig: r.failover,
 	})
@@ -120,7 +133,7 @@ func (t *bindingTool) InvokableRun(ctx context.Context, arguments string, _ ...e
 	return string(result.Body), nil
 }
 
-func toolEventMiddleware(emit Emitter) compose.ToolMiddleware {
+func toolEventMiddleware(emit Emitter, authorize func(name, arguments string) error) compose.ToolMiddleware {
 	return compose.ToolMiddleware{Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
 		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
 			if emit != nil {
@@ -128,7 +141,13 @@ func toolEventMiddleware(emit Emitter) compose.ToolMiddleware {
 					return nil, err
 				}
 			}
-			output, err := next(context.WithValue(ctx, toolCallIDKey{}, input.CallID), input)
+			var output *compose.ToolOutput
+			var err error
+			if authorizeErr := authorizeTool(authorize, input); authorizeErr != nil {
+				output = &compose.ToolOutput{Result: fmt.Sprintf(`{"error":%q}`, authorizeErr.Error())}
+			} else {
+				output, err = next(context.WithValue(ctx, toolCallIDKey{}, input.CallID), input)
+			}
 			if err != nil {
 				output, err = &compose.ToolOutput{Result: fmt.Sprintf(`{"error":%q}`, err.Error())}, nil
 			}
@@ -140,4 +159,11 @@ func toolEventMiddleware(emit Emitter) compose.ToolMiddleware {
 			return output, err
 		}
 	}}
+}
+
+func authorizeTool(authorize func(name, arguments string) error, input *compose.ToolInput) error {
+	if authorize == nil {
+		return nil
+	}
+	return authorize(input.Name, input.Arguments)
 }

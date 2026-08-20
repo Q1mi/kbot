@@ -9,6 +9,7 @@ import (
 
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
+	"github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
@@ -28,6 +29,7 @@ type AgentSnapshot struct {
 	PromptVersionID       string
 	ModelProfileVersionID string
 	ToolVersionIDs        []string
+	SkillVersionIDs       []string
 }
 
 type executionPlanner interface {
@@ -41,6 +43,7 @@ type Engine struct {
 	tools    ToolRuntime
 	prompts  PromptRenderer
 	profiles ModelProfileResolver
+	skills   SkillResolver
 }
 
 type ToolRuntime interface {
@@ -56,6 +59,10 @@ type ModelProfileResolver interface {
 	Resolve(ctx context.Context, workspaceID, versionID string) (modelconfig.ProfileVersion, error)
 }
 
+type SkillResolver interface {
+	Resolve(ctx context.Context, workspaceID, versionID string) (skill.Version, error)
+}
+
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
 	engine := &Engine{platform: platform, model: chatModel}
 	engine.planner, _ = chatModel.(executionPlanner)
@@ -69,6 +76,11 @@ func (e *Engine) WithTools(tools ToolRuntime) *Engine {
 
 func (e *Engine) WithRuntimeConfig(prompts PromptRenderer, profiles ModelProfileResolver) *Engine {
 	e.prompts, e.profiles = prompts, profiles
+	return e
+}
+
+func (e *Engine) WithSkills(skills SkillResolver) *Engine {
+	e.skills = skills
 	return e
 }
 

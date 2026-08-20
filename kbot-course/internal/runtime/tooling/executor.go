@@ -45,9 +45,13 @@ type SandboxRunner interface {
 }
 
 type Binding struct {
-	Name      string
-	VersionID string
-	Info      *schema.ToolInfo
+	Name            string
+	VersionID       string
+	Info            *schema.ToolInfo
+	RequiresNetwork bool
+	KBScoped        bool
+	RestrictKBs     bool
+	AllowedKBs      []string
 }
 
 type Executor struct {
@@ -244,7 +248,9 @@ func (e *Executor) Bind(ctx context.Context, workspaceID string, versionIDs []st
 		}
 		bindings = append(bindings, Binding{
 			Name: version.Name, VersionID: version.ID,
-			Info: &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
+			Info:            &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
+			RequiresNetwork: version.SourceType == "rest_api" || version.SourceType == "mcp_server" || version.SourceType == "a2a" || version.SourceType == "",
+			KBScoped:        version.SourceType == "internal_sdk" && version.Endpoint == "search_knowledge_base",
 		})
 	}
 	return bindings, nil
