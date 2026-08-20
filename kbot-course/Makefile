@@ -1,4 +1,4 @@
-.PHONY: build test run crossborder-build crossborder-test
+.PHONY: build test run admin-build crossborder-build crossborder-test
 
 build:
 	@mkdir -p bin
@@ -9,6 +9,9 @@ test:
 
 run:
 	go run ./cmd/server
+
+admin-build:
+	cd web/admin && npm run build
 
 crossborder-build:
 	$(MAKE) -C projects/crossborder build

@@ -40,3 +40,7 @@ make build
 make test
 make run
 ```
+
+## Admin Console
+
+`web/admin` 从第 04 课开始直接提供最终 React Admin 源码。前端用于调用 API、查看会话、审批、评测和 Trace，课程现场编码聚焦 Go Agent 后端。
