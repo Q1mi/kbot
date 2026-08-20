@@ -5,20 +5,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cloudwego/eino/schema"
+	"github.com/cloudwego/eino/components/model"
 
 	"github.com/Q1mi/kbot/internal/domain"
 )
-
-// Generator 隔离模型框架与 Agent 循环。
-// 后续可以接入真实 Eino ChatModel，也可以在测试中注入脚本模型。
-type Generator interface {
-	Generate(
-		ctx context.Context,
-		messages []*schema.Message,
-		tools []*schema.ToolInfo,
-	) (*schema.Message, error)
-}
 
 // Platform 是 Runtime 读取控制面数据所需的最小接口。
 // Runtime 只按 Conversation 中固定的版本读取快照。
@@ -40,12 +30,12 @@ type AgentSnapshot struct {
 // Engine 只依赖稳定接口，不直接依赖控制面的具体存储实现。
 type Engine struct {
 	platform Platform
-	gen      Generator
+	model    model.BaseChatModel
 }
 
 // New 创建 Agent Runtime。
-func New(platform Platform, gen Generator) *Engine {
-	return &Engine{platform: platform, gen: gen}
+func New(platform Platform, chatModel model.BaseChatModel) *Engine {
+	return &Engine{platform: platform, model: chatModel}
 }
 
 // ResolveSnapshot 按会话固定的 AgentVersion 解析运行快照。

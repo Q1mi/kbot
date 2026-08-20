@@ -12,6 +12,7 @@ import (
 	"github.com/Q1mi/kbot/internal/api"
 	"github.com/Q1mi/kbot/internal/config"
 	"github.com/Q1mi/kbot/internal/platform/iam"
+	"github.com/Q1mi/kbot/internal/runtime/llm"
 )
 
 func main() {
@@ -20,6 +21,9 @@ func main() {
 		log.Fatal(err)
 	}
 	iamService := iam.New(iam.NewMemoryStore(), cfg.JWTSecret, cfg.JWTIssuer)
+	if _, err := llm.NewGateway(cfg); err != nil {
+		log.Fatalf("create LLM gateway: %v", err)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

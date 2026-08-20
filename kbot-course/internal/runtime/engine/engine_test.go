@@ -5,19 +5,30 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/Q1mi/kbot/internal/domain"
 )
 
-type fakeGenerator struct{}
+type fakeChatModel struct{}
 
-func (fakeGenerator) Generate(
+func (fakeChatModel) Generate(
 	context.Context,
 	[]*schema.Message,
-	[]*schema.ToolInfo,
+	...model.Option,
 ) (*schema.Message, error) {
 	return &schema.Message{}, nil
+}
+
+func (m fakeChatModel) Stream(
+	ctx context.Context, messages []*schema.Message, opts ...model.Option,
+) (*schema.StreamReader[*schema.Message], error) {
+	response, err := m.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
 }
 
 type fakePlatform struct {
@@ -45,7 +56,7 @@ func (p *fakePlatform) GetAgentSnapshotByVersion(
 	return snapshot, nil
 }
 
-var _ Generator = fakeGenerator{}
+var _ model.BaseChatModel = fakeChatModel{}
 var _ Platform = (*fakePlatform)(nil)
 
 func TestResolveSnapshotUsesConversationPinnedVersion(t *testing.T) {
@@ -71,7 +82,7 @@ func TestResolveSnapshotUsesConversationPinnedVersion(t *testing.T) {
 		},
 	}
 
-	runtime := New(controlPlane, fakeGenerator{})
+	runtime := New(controlPlane, fakeChatModel{})
 	snapshot, err := runtime.ResolveSnapshot(context.Background(), "conversation-1")
 	if err != nil {
 		t.Fatalf("resolve snapshot: %v", err)
