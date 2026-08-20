@@ -11,6 +11,8 @@ import (
 )
 
 func main() {
+	// 后续课程会按 infrastructure → platform → runtime → API 的顺序
+	// 在这里装配依赖。当前版本先保留最小 HTTP 服务。
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -26,6 +26,13 @@
 - `/healthz`；
 - SIGINT/SIGTERM 与优雅退出。
 
+第 01 课结束后，项目将增加：
+
+- `internal/domain`：最小领域对象；
+- `internal/platform`：控制面入口；
+- `internal/runtime/engine`：Runtime 稳定接口；
+- Conversation 固定 AgentVersion 的自动化测试。
+
 ## 基础命令
 
 ```bash
