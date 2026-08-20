@@ -64,6 +64,11 @@ type SkillResolver interface {
 	Resolve(ctx context.Context, workspaceID, versionID string) (skill.Version, error)
 }
 
+type ConversationMessageStore interface {
+	ListMessages(ctx context.Context, workspaceID, conversationID string) ([]domain.Message, error)
+	AppendMessage(ctx context.Context, workspaceID, conversationID, role, content string) error
+}
+
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
 	engine := &Engine{platform: platform, model: chatModel}
 	engine.planner, _ = chatModel.(executionPlanner)

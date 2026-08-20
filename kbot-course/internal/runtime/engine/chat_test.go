@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,39 @@ type skillCallingChatModel struct {
 	calls         int
 	sawSkillBody  bool
 	sawToolResult bool
+}
+
+type historyPlatform struct {
+	*fakePlatform
+	messages []domain.Message
+}
+
+func (p *historyPlatform) ListMessages(context.Context, string, string) ([]domain.Message, error) {
+	return append([]domain.Message(nil), p.messages...), nil
+}
+
+func (p *historyPlatform) AppendMessage(_ context.Context, _ string, conversationID, role, content string) error {
+	p.messages = append(p.messages, domain.Message{ConversationID: conversationID, Role: role, Content: content})
+	return nil
+}
+
+type historyChatModel struct {
+	calls    int
+	lastSeen []*schema.Message
+}
+
+func (m *historyChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	m.calls++
+	m.lastSeen = append([]*schema.Message(nil), messages...)
+	return schema.AssistantMessage(fmt.Sprintf("answer-%d", m.calls), nil), nil
+}
+
+func (m *historyChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := m.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
 }
 
 func (m *skillCallingChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
@@ -238,6 +272,29 @@ max-steps: 4
 	}
 	if !containsEvent(events, "skill_trigger") {
 		t.Fatalf("events = %v", events)
+	}
+}
+
+func TestChatStreamFeedsPersistedConversationHistoryToModel(t *testing.T) {
+	platform := &historyPlatform{fakePlatform: &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots:    map[string]*AgentSnapshot{"v1": {ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "system"}},
+	}}
+	chatModel := &historyChatModel{}
+	runtime := New(platform, chatModel)
+	for _, input := range []string{"first", "second"} {
+		if err := runtime.ChatStream(t.Context(), ChatRequest{
+			ConversationID: "c1", WorkspaceID: "ws-1", Message: input,
+		}, func(Event) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(chatModel.lastSeen) != 4 || chatModel.lastSeen[1].Content != "first" ||
+		chatModel.lastSeen[2].Content != "answer-1" || chatModel.lastSeen[3].Content != "second" {
+		t.Fatalf("messages = %#v", chatModel.lastSeen)
+	}
+	if len(platform.messages) != 4 {
+		t.Fatalf("persisted messages = %#v", platform.messages)
 	}
 }
 

@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Q1mi/kbot/internal/api/middleware"
+	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 )
 
@@ -15,10 +18,22 @@ type ChatRuntime interface {
 	ChatStream(ctx context.Context, req engine.ChatRequest, emit engine.Emitter) error
 }
 
-type StreamHandler struct{ runtime ChatRuntime }
+type ConversationResolver interface {
+	ResolveConversation(ctx context.Context, workspaceID, userID, agentID, environment, conversationID string) (*domain.Conversation, error)
+}
+
+type StreamHandler struct {
+	runtime       ChatRuntime
+	conversations ConversationResolver
+}
 
 func NewStreamHandler(runtime ChatRuntime) *StreamHandler {
 	return &StreamHandler{runtime: runtime}
+}
+
+func (h *StreamHandler) WithConversations(conversations ConversationResolver) *StreamHandler {
+	h.conversations = conversations
+	return h
 }
 
 func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +47,20 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.WorkspaceID = middleware.WorkspaceID(r.Context())
+	if h.conversations != nil {
+		conversation, err := h.conversations.ResolveConversation(
+			r.Context(), req.WorkspaceID, middleware.UserID(r.Context()), chi.URLParam(r, "agentID"),
+			req.AgentEnvironment, req.ConversationID,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		req.ConversationID = conversation.ID
+	} else if req.ConversationID == "" {
+		http.Error(w, "conversation_id is required", http.StatusBadRequest)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)

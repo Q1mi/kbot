@@ -14,9 +14,10 @@ import (
 )
 
 type ChatRequest struct {
-	ConversationID string `json:"conversation_id"`
-	Message        string `json:"message"`
-	WorkspaceID    string `json:"-"`
+	ConversationID   string `json:"conversation_id"`
+	Message          string `json:"message"`
+	WorkspaceID      string `json:"-"`
+	AgentEnvironment string `json:"agent_env,omitempty"`
 }
 
 type Event struct {
@@ -64,11 +65,34 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 	}}); err != nil {
 		return err
 	}
-	messages := []*schema.Message{schema.SystemMessage(systemPrompt), schema.UserMessage(req.Message)}
+	messages := []*schema.Message{schema.SystemMessage(systemPrompt)}
+	if history, ok := e.platform.(ConversationMessageStore); ok {
+		stored, historyErr := history.ListMessages(ctx, snapshot.WorkspaceID, req.ConversationID)
+		if historyErr != nil {
+			return fmt.Errorf("load conversation history: %w", historyErr)
+		}
+		for _, message := range stored {
+			switch message.Role {
+			case "user":
+				messages = append(messages, schema.UserMessage(message.Content))
+			case "assistant":
+				messages = append(messages, schema.AssistantMessage(message.Content, nil))
+			}
+		}
+		if historyErr := history.AppendMessage(ctx, snapshot.WorkspaceID, req.ConversationID, "user", req.Message); historyErr != nil {
+			return fmt.Errorf("persist user message: %w", historyErr)
+		}
+	}
+	messages = append(messages, schema.UserMessage(req.Message))
 	answer, streamed, err := e.runPlan(ctx, snapshot, plan, packages, messages, emit)
 	if err != nil {
 		_ = emitContext(ctx, emit, Event{Type: "error", Data: map[string]string{"message": err.Error()}})
 		return fmt.Errorf("generate: %w", err)
+	}
+	if history, ok := e.platform.(ConversationMessageStore); ok {
+		if historyErr := history.AppendMessage(ctx, snapshot.WorkspaceID, req.ConversationID, "assistant", answer.Content); historyErr != nil {
+			return fmt.Errorf("persist assistant message: %w", historyErr)
+		}
 	}
 	if !streamed {
 		for _, delta := range answerDeltas(answer.Content, 8) {
