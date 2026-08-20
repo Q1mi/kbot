@@ -1,4 +1,4 @@
-.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test doubao-check
+.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test insurance-test deploy-config doubao-check
 
 build:
 	@mkdir -p bin
@@ -38,3 +38,6 @@ crossborder-test:
 
 insurance-test:
 	$(MAKE) -C projects/insurance test
+
+deploy-config:
+	docker compose --env-file .env.example -f deploy/compose.yaml config
