@@ -17,6 +17,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
+	platformeval "github.com/Q1mi/kbot/internal/platform/eval"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -70,6 +71,7 @@ func main() {
 	approvals := approval.NewPostgresService(pool)
 	guards := guard.NewService(guard.NewPipeline(guard.MaxLengthRule{MaxRunes: 8000}, guard.InjectionRule{}, guard.PIIRule{}))
 	auditLedger := audit.NewPostgresLedger(pool)
+	evaluator, evalData := platformeval.NewService(), platformeval.NewPostgresCatalog(pool)
 	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
 	if err != nil {
 		log.Fatalf("create sandbox runner client: %v", err)
@@ -99,7 +101,8 @@ func main() {
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
 			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
-			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards, ApprovalWorker: approvalWorker,
+			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards,
+			Evaluator: evaluator, EvalData: evalData, ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

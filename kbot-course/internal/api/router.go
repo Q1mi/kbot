@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
+	platformeval "github.com/Q1mi/kbot/internal/platform/eval"
 	"github.com/Q1mi/kbot/internal/platform/iam"
 	"github.com/Q1mi/kbot/internal/platform/kb"
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
@@ -38,7 +40,40 @@ type ControlPlane struct {
 	Profiles       *modelconfig.Registry
 	Skills         *skill.Service
 	Guard          *guard.Service
+	Evaluator      *platformeval.Service
+	EvalData       *platformeval.Catalog
 	ApprovalWorker interface{ Wake() }
+}
+
+type runtimeEvalAgent struct {
+	runtime     ChatRuntime
+	agents      *agent.Service
+	workspaceID string
+	userID      string
+	agentID     string
+	versionID   string
+}
+
+func (a runtimeEvalAgent) Run(ctx context.Context, input string) (platformeval.Output, error) {
+	conversation, err := a.agents.CreateConversationForVersion(ctx, a.workspaceID, a.agentID, a.versionID, "eval:"+a.userID)
+	if err != nil {
+		return platformeval.Output{}, err
+	}
+	output := platformeval.Output{}
+	err = a.runtime.ChatStream(ctx, engine.ChatRequest{ConversationID: conversation.ID, WorkspaceID: a.workspaceID, UserID: "eval:" + a.userID, Message: input}, func(event engine.Event) error {
+		if event.Type == "answer_done" {
+			output.Content = event.Text
+		}
+		if event.Type == "tool_finished" {
+			if data, ok := event.Data.(map[string]any); ok {
+				if name, ok := data["name"].(string); ok {
+					output.Tools = append(output.Tools, name)
+				}
+			}
+		}
+		return nil
+	})
+	return output, err
 }
 
 type agentConfigRequest struct {
@@ -189,6 +224,12 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					http.Error(w, "invalid JSON", http.StatusBadRequest)
 					return
+				}
+				if control.EvalData != nil && req.Env != "dev" {
+					if err := control.EvalData.RequirePassedRun(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "agentID"), req.VersionID); err != nil {
+						http.Error(w, err.Error(), http.StatusPreconditionFailed)
+						return
+					}
 				}
 				if err := control.Agents.Promote(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "agentID"), req.Env, req.VersionID); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -555,6 +596,140 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				}
 				writeJSON(w, http.StatusOK, filtered)
 			})
+		}
+		if control.Evaluator != nil && control.EvalData != nil {
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/eval/datasets", func(w http.ResponseWriter, r *http.Request) {
+				datasets, err := control.EvalData.ListDatasets(r.Context(), middleware.WorkspaceID(r.Context()))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, http.StatusOK, datasets)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/eval/datasets", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Name       string `json:"name"`
+					TargetKind string `json:"target_kind"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				dataset, err := control.EvalData.CreateDataset(r.Context(), middleware.WorkspaceID(r.Context()), req.Name, req.TargetKind)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, dataset)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/eval/datasets/{datasetID}/cases", func(w http.ResponseWriter, r *http.Request) {
+				cases, err := control.EvalData.Cases(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "datasetID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, cases)
+			})
+			protected.With(middleware.Workspace(iamService)).Post("/api/v1/eval/datasets/{datasetID}/cases", func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Input          string `json:"input"`
+					Expected       string `json:"expected"`
+					ConversationID string `json:"conversation_id"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				metadata := ""
+				if req.ConversationID != "" {
+					metadata = fmt.Sprintf(`{"conversation_id":%q}`, req.ConversationID)
+				}
+				item, err := control.EvalData.AddCase(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "datasetID"), req.Input, req.Expected, metadata)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusCreated, item)
+			})
+			protected.With(middleware.Workspace(iamService)).Get("/api/v1/eval/datasets/{datasetID}/runs", func(w http.ResponseWriter, r *http.Request) {
+				runs, err := control.EvalData.ListRuns(r.Context(), middleware.WorkspaceID(r.Context()), chi.URLParam(r, "datasetID"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				writeJSON(w, http.StatusOK, runs)
+			})
+			if runtime != nil && control.Agents != nil {
+				protected.With(middleware.Workspace(iamService)).Post("/api/v1/eval/runs", func(w http.ResponseWriter, r *http.Request) {
+					var req struct {
+						DatasetID           string  `json:"dataset_id"`
+						AgentID             string  `json:"agent_id"`
+						AgentVersionID      string  `json:"agent_version_id"`
+						JudgeTier           string  `json:"judge_tier"`
+						JudgeAgentID        string  `json:"judge_agent_id"`
+						JudgeAgentVersionID string  `json:"judge_agent_version_id"`
+						Threshold           float64 `json:"threshold"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						http.Error(w, "invalid JSON", http.StatusBadRequest)
+						return
+					}
+					if req.DatasetID == "" || req.AgentID == "" || req.AgentVersionID == "" {
+						http.Error(w, "dataset and pinned agent version are required", http.StatusBadRequest)
+						return
+					}
+					if err := platformeval.Gate(platformeval.Report{PassRate: 1}, req.Threshold); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					workspaceID := middleware.WorkspaceID(r.Context())
+					stored, err := control.EvalData.Cases(r.Context(), workspaceID, req.DatasetID)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusNotFound)
+						return
+					}
+					cases := make([]platformeval.Case, 0, len(stored))
+					for _, item := range stored {
+						cases = append(cases, platformeval.Case{ID: item.ID, Input: item.Input, ExpectedContains: item.Expected})
+					}
+					target := runtimeEvalAgent{runtime: runtime, agents: control.Agents, workspaceID: workspaceID, userID: middleware.UserID(r.Context()), agentID: req.AgentID, versionID: req.AgentVersionID}
+					var judge platformeval.Judge = platformeval.ContainsJudge{}
+					if req.JudgeTier != "" && req.JudgeTier != "deterministic" {
+						if (req.JudgeTier != "light" && req.JudgeTier != "full") || req.JudgeAgentID == "" || req.JudgeAgentVersionID == "" {
+							http.Error(w, "light/full judge requires a pinned judge agent version", http.StatusBadRequest)
+							return
+						}
+						judgeAgent := runtimeEvalAgent{runtime: runtime, agents: control.Agents, workspaceID: workspaceID, userID: middleware.UserID(r.Context()), agentID: req.JudgeAgentID, versionID: req.JudgeAgentVersionID}
+						judge = platformeval.LLMJudge{Tier: req.JudgeTier, Runner: func(ctx context.Context, prompt string) (string, error) {
+							output, err := judgeAgent.Run(ctx, prompt)
+							return output.Content, err
+						}}
+					}
+					report, err := control.Evaluator.RunWithJudge(r.Context(), cases, target, judge)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					passed := platformeval.Gate(report, req.Threshold) == nil
+					scores := make([]map[string]any, 0, len(report.Results))
+					for _, result := range report.Results {
+						scores = append(scores, map[string]any{"case_id": result.CaseID, "dimension": "correctness", "score": result.Score, "reason": strings.Join(result.Reasons, "; ")})
+					}
+					storedRun, err := control.EvalData.RecordRun(r.Context(), workspaceID, platformeval.StoredRun{
+						DatasetID: req.DatasetID, AgentID: req.AgentID, AgentVersionID: req.AgentVersionID,
+						JudgeKind: judge.Kind(), Threshold: req.Threshold, PassRate: report.PassRate, Passed: passed, Report: report,
+					})
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					status := http.StatusOK
+					if !passed {
+						status = http.StatusUnprocessableEntity
+					}
+					writeJSON(w, status, map[string]any{"run_id": storedRun.ID, "agent_version_id": storedRun.AgentVersionID, "judge": storedRun.JudgeKind, "pass_rate": report.PassRate, "passed": passed, "total": len(report.Results), "scores": scores})
+				})
+			}
 		}
 		if control.Approvals != nil {
 			protected.With(middleware.Workspace(iamService)).Get("/api/v1/approvals", func(w http.ResponseWriter, r *http.Request) {

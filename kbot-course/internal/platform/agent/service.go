@@ -135,6 +135,24 @@ func (s *Service) CreateConversation(ctx context.Context, workspaceID, agentID, 
 	return &conversation, nil
 }
 
+// CreateConversationForVersion 为离线评测固定目标版本，避免环境指针在用例执行期间漂移。
+func (s *Service) CreateConversationForVersion(ctx context.Context, workspaceID, agentID, versionID, userID string) (*domain.Conversation, error) {
+	if s.postgres != nil {
+		return s.postgres.createConversationForVersion(ctx, workspaceID, agentID, versionID, userID)
+	}
+	s.mu.RLock()
+	version, ok := s.versions[versionID]
+	s.mu.RUnlock()
+	if !ok || version.WorkspaceID != workspaceID || version.AgentID != agentID {
+		return nil, fmt.Errorf("agent version %s not found", versionID)
+	}
+	conversation := domain.Conversation{ID: fmt.Sprintf("conversation-%d", s.sequence.Add(1)), WorkspaceID: workspaceID, AgentID: agentID, AgentVersionID: versionID, UserID: userID, CreatedAt: time.Now().UTC()}
+	s.mu.Lock()
+	s.conversations[conversation.ID] = conversation
+	s.mu.Unlock()
+	return &conversation, nil
+}
+
 func (s *Service) Snapshot(ctx context.Context, workspaceID, versionID string) (*engine.AgentSnapshot, error) {
 	if s.postgres != nil {
 		return s.postgres.snapshot(ctx, workspaceID, versionID)

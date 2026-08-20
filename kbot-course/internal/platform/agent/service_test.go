@@ -38,6 +38,21 @@ func TestConversationPinsPromotedAgentVersion(t *testing.T) {
 	}
 }
 
+func TestEvaluationConversationPinsRequestedVersion(t *testing.T) {
+	service := NewService()
+	service.versions["agent-v1"] = domain.AgentVersion{ID: "agent-v1", AgentID: "agent-1", WorkspaceID: "ws-1", Version: 1}
+	conversation, err := service.CreateConversationForVersion(t.Context(), "ws-1", "agent-1", "agent-v1", "eval:user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conversation.AgentVersionID != "agent-v1" || conversation.UserID != "eval:user-1" {
+		t.Fatalf("conversation = %+v", conversation)
+	}
+	if _, err := service.CreateConversationForVersion(t.Context(), "ws-2", "agent-1", "agent-v1", "eval:user-1"); err == nil {
+		t.Fatal("cross-workspace version was accepted")
+	}
+}
+
 func TestSnapshotReturnsDefensiveCopy(t *testing.T) {
 	service := NewService()
 	version := domain.AgentVersion{ID: "v1", AgentID: "a", WorkspaceID: "ws"}

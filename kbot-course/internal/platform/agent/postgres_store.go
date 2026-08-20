@@ -103,6 +103,22 @@ func (s *postgresStore) createConversation(ctx context.Context, workspaceID, age
 	return &conversation, err
 }
 
+func (s *postgresStore) createConversationForVersion(ctx context.Context, workspaceID, agentID, versionID, userID string) (*domain.Conversation, error) {
+	var conversation domain.Conversation
+	err := s.pool.QueryRow(ctx, `INSERT INTO conversations (id,workspace_id,agent_id,agent_version_id,user_id)
+		SELECT gen_random_uuid()::text,$1,$2,v.id,$4 FROM agent_versions v
+		WHERE v.workspace_id=$1 AND v.agent_id=$2 AND v.id=$3
+		RETURNING id,workspace_id,agent_id,agent_version_id,user_id,created_at`,
+		workspaceID, agentID, versionID, userID).Scan(
+		&conversation.ID, &conversation.WorkspaceID, &conversation.AgentID,
+		&conversation.AgentVersionID, &conversation.UserID, &conversation.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("agent version %s not found", versionID)
+	}
+	return &conversation, err
+}
+
 func (s *postgresStore) snapshot(ctx context.Context, workspaceID, versionID string) (*engine.AgentSnapshot, error) {
 	var raw []byte
 	var err error

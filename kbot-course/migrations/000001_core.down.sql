@@ -1,3 +1,6 @@
+DROP TABLE IF EXISTS eval_runs;
+DROP TABLE IF EXISTS eval_cases;
+DROP TABLE IF EXISTS eval_datasets;
 DROP TABLE IF EXISTS audit_events;
 DROP TABLE IF EXISTS approval_requests;
 DROP TABLE IF EXISTS messages;
