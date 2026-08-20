@@ -3,24 +3,31 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/cloudwego/eino/schema"
-	"go.opentelemetry.io/otel/attribute"
-
-	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
-	"github.com/Q1mi/kbot/internal/runtime/tooling"
+	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
+	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
 )
 
-// ResumeApproved executes the exact approved ToolCall and continues generation from its checkpoint.
+func decodeFrameworkCheckpoint(payload []byte) ([]byte, string, string, error) {
+	var stored persistedFrameworkCheckpoint
+	if err := json.Unmarshal(payload, &stored); err != nil || stored.Version != frameworkCheckpointVersion ||
+		len(stored.Data) == 0 || stored.InterruptID == "" {
+		return nil, "", "", fmt.Errorf("approval checkpoint is incompatible with Eino ADK runtime v%d", frameworkCheckpointVersion)
+	}
+	return stored.Data, stored.InterruptID, stored.ActiveSkillName, nil
+}
+
+// ResumeApproved 通过 Eino ResumeWithParams 精确恢复被批准的中断地址。
 func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, checkpoint []byte, emit Emitter) error {
 	if request == nil || request.RunID == "" || request.ToolCallID == "" || request.ToolVersionID == "" {
 		return fmt.Errorf("complete approval binding is required")
 	}
-	if e.tools == nil {
-		return fmt.Errorf("tool runtime is required")
+	if e.tools == nil || e.approvals == nil {
+		return fmt.Errorf("tool runtime and approval gate are required")
 	}
 	snapshot, err := e.ResolveSnapshot(ctx, request.RunID)
 	if err != nil {
@@ -29,85 +36,74 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 	if snapshot.WorkspaceID != request.WorkspaceID {
 		return fmt.Errorf("approval and conversation workspaces do not match")
 	}
-	var state reactCheckpoint
-	if err := json.Unmarshal(checkpoint, &state); err != nil {
-		return fmt.Errorf("decode approval checkpoint: %w", err)
-	}
-	if len(state.History) == 0 || len(state.ToolVersionIDs) == 0 {
-		return fmt.Errorf("approval checkpoint has no active runtime policy")
-	}
-	approvedToolIsActive := false
-	for _, versionID := range state.ToolVersionIDs {
-		if versionID == request.ToolVersionID {
-			approvedToolIsActive = true
-			break
-		}
-	}
-	if !approvedToolIsActive {
-		return fmt.Errorf("approved tool is outside the checkpoint policy")
-	}
-	if err := emitContext(ctx, emit, Event{Type: "tool_started", Data: map[string]any{"call_id": request.ToolCallID, "resumed": true}}); err != nil {
-		return err
-	}
-	toolContext, finishTool := courseotel.StartOperation(ctx, "tool.execute.approved",
-		attribute.String("kbot.tool.version.id", request.ToolVersionID),
-		attribute.String("kbot.tool.call.id", request.ToolCallID),
-	)
-	result, err := e.tools.Execute(toolContext, tooling.Call{
-		WorkspaceID: request.WorkspaceID, ToolVersionID: request.ToolVersionID,
-		Arguments: request.Arguments, IdempotencyKey: "approval:" + request.ID,
-	})
-	finishTool(err)
-	if e.audit != nil && request.DecidedBy != "" {
-		data := map[string]any{"conversation_id": request.RunID, "tool_call_id": request.ToolCallID, "status_code": result.StatusCode}
-		if err != nil {
-			data["failed"] = true
-		}
-		_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
-			WorkspaceID: request.WorkspaceID, ActorID: request.DecidedBy, Action: "tool.execute.approved",
-			ResourceID: request.ToolVersionID, Data: data,
-		})
-	}
-	if err != nil {
-		return fmt.Errorf("execute approved tool: %w", err)
-	}
-	state.History = append(state.History, schema.ToolMessage(string(result.Body), request.ToolCallID))
-	if err := emitContext(ctx, emit, Event{Type: "tool_finished", Data: map[string]any{"call_id": request.ToolCallID, "status": result.StatusCode, "resumed": true}}); err != nil {
-		return err
-	}
-	bindings, err := e.tools.Bind(ctx, request.WorkspaceID, state.ToolVersionIDs)
+	bindings, err := e.tools.Bind(ctx, request.WorkspaceID, snapshot.ToolVersionIDs)
 	if err != nil {
 		return fmt.Errorf("bind pinned tools: %w", err)
 	}
-	maxSteps := state.MaxSteps
+	if !containsToolVersion(bindings, request.ToolVersionID) {
+		return fmt.Errorf("approved tool is outside the pinned agent snapshot")
+	}
+	plan, err := e.executionPlan(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	plan = e.guardExecutionPlan(plan, request.WorkspaceID)
+	plan = observeExecutionPlan(plan)
+	packages, err := e.resolveSkills(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	frameworkData, interruptID, activeSkillName, err := decodeFrameworkCheckpoint(checkpoint)
+	if err != nil {
+		return err
+	}
+	userInput := ""
+	if activeSkillName != "" {
+		userInput = "/skill " + activeSkillName
+	}
+	skillRuntime, err := skillrunner.NewRuntime(ctx, packages, bindings, userInput, func(pkg platformskill.Package) error {
+		if e.audit != nil && request.DecidedBy != "" {
+			_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
+				WorkspaceID: request.WorkspaceID, ActorID: request.DecidedBy, Action: "skill.triggered",
+				ResourceID: pkg.Name, Data: map[string]any{"conversation_id": request.RunID, "resumed": true},
+			})
+		}
+		return emitContext(ctx, emit, Event{Type: "skill_trigger", Data: map[string]string{"name": pkg.Name, "resumed": "true"}})
+	})
+	if err != nil {
+		return err
+	}
+	var authorize func(string, string) error
+	runner := NewADKRunner(plan.Model, e.tools, request.WorkspaceID).
+		WithModelPolicy(plan.Retry, plan.Failover).
+		WithApprovals(e.approvals, request.RunID).
+		WithAudit(e.audit, request.DecidedBy)
+	if skillRuntime != nil {
+		if err := skillRuntime.Restore(activeSkillName); err != nil {
+			return err
+		}
+		authorize = skillRuntime.Authorize
+		runner.WithHandlers(skillRuntime.Handlers...).
+			WithSkillState(skillRuntime.ActiveName, skillRuntime.Restore)
+	}
+	runner.WithToolAuthorization(authorize)
+	maxSteps := snapshot.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = 4
 	}
-	generator := e.gen
-	if snapshot.ModelProfileVersionID != "" {
-		if e.profiles == nil {
-			return fmt.Errorf("model profile resolver is required by the pinned snapshot")
-		}
-		profile, err := e.profiles.Resolve(ctx, request.WorkspaceID, snapshot.ModelProfileVersionID)
-		if err != nil {
-			return fmt.Errorf("resolve pinned model profile: %w", err)
-		}
-		routed, ok := e.gen.(RoutedGenerator)
-		if !ok {
-			return fmt.Errorf("generator does not support pinned model profiles")
-		}
-		generator = pinnedProfileGenerator{next: routed, profile: profile}
-	}
-	if e.guard != nil {
-		generator = guardedGenerator{next: generator, guard: e.guard, workspaceID: request.WorkspaceID}
-	}
-	generator = observedGenerator{next: generator}
-	answer, err := NewReActRunner(generator, e.tools, request.WorkspaceID).
-		WithApprovals(e.approvals, request.RunID).
-		WithAudit(e.audit, request.DecidedBy).
-		Run(ctx, state.History, bindings, maxSteps, emit)
+	answer, err := runner.Resume(ctx, request.RunID, frameworkData, interruptID, bindings, maxSteps, emit)
 	if err != nil {
-		return fmt.Errorf("continue approved run: %w", err)
+		var awaiting *AwaitingApprovalError
+		if errors.As(err, &awaiting) {
+			if emitErr := emitContext(ctx, emit, Event{Type: "approval_requested", Data: map[string]string{
+				"approval_id": awaiting.ApprovalID, "tool_name": awaiting.ToolName,
+				"tool_call_id": awaiting.ToolCallID, "tool_version_id": awaiting.ToolVersionID,
+			}}); emitErr != nil {
+				return emitErr
+			}
+			return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "awaiting_approval"}})
+		}
+		return fmt.Errorf("resume Eino approval checkpoint: %w", err)
 	}
 	if e.guard != nil {
 		decision, guardErr := e.guard.Evaluate(ctx, request.WorkspaceID, "on_output", answer.Content)
@@ -133,4 +129,13 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 		return err
 	}
 	return emitContext(ctx, emit, Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
+}
+
+func containsToolVersion(bindings []ToolBinding, versionID string) bool {
+	for _, binding := range bindings {
+		if binding.VersionID == versionID {
+			return true
+		}
+	}
+	return false
 }

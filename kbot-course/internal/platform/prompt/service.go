@@ -3,7 +3,6 @@
 package prompt
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -13,6 +12,9 @@ import (
 	"sync/atomic"
 	"text/template"
 	"time"
+
+	einoprompt "github.com/cloudwego/eino/components/prompt"
+	"github.com/cloudwego/eino/schema"
 )
 
 type Prompt struct {
@@ -49,13 +51,18 @@ type Service struct {
 	mu         sync.RWMutex
 	prompts    map[string]Prompt
 	versions   map[string]Version
+	compiled   map[string]einoprompt.ChatTemplate
 	promotions map[string]string
 	rollouts   map[string]rollout
 	sequence   atomic.Uint64
 }
 
 func NewService() *Service {
-	return &Service{prompts: make(map[string]Prompt), versions: make(map[string]Version), promotions: make(map[string]string), rollouts: make(map[string]rollout)}
+	return &Service{
+		prompts: make(map[string]Prompt), versions: make(map[string]Version),
+		compiled: make(map[string]einoprompt.ChatTemplate), promotions: make(map[string]string),
+		rollouts: make(map[string]rollout),
+	}
 }
 
 func (s *Service) Publish(_ context.Context, version Version) error {
@@ -65,6 +72,7 @@ func (s *Service) Publish(_ context.Context, version Version) error {
 	if _, err := template.New(version.Name).Option("missingkey=error").Parse(version.Template); err != nil {
 		return fmt.Errorf("parse prompt: %w", err)
 	}
+	compiled := einoprompt.FromMessages(schema.GoTemplate, schema.SystemMessage(version.Template))
 	if version.PromptID == "" {
 		version.PromptID = version.ID
 	}
@@ -83,6 +91,7 @@ func (s *Service) Publish(_ context.Context, version Version) error {
 		return fmt.Errorf("prompt version %s already exists", version.ID)
 	}
 	s.versions[version.ID] = version
+	s.compiled[version.ID] = compiled
 	if _, exists := s.prompts[version.PromptID]; !exists {
 		now := version.CreatedAt
 		s.prompts[version.PromptID] = Prompt{ID: version.PromptID, WorkspaceID: version.WorkspaceID, Name: version.Name, Category: version.Category, CreatedAt: now, UpdatedAt: now}
@@ -129,12 +138,12 @@ func (s *Service) CreateVersion(ctx context.Context, workspaceID, promptID, body
 	return cloneVersion(version), nil
 }
 
-func (s *Service) Render(_ context.Context, workspaceID, versionID string, variables map[string]string) (string, error) {
+func (s *Service) Render(ctx context.Context, workspaceID, versionID string, variables map[string]string) (string, error) {
 	converted := make(map[string]any, len(variables))
 	for key, value := range variables {
 		converted[key] = value
 	}
-	return s.render(workspaceID, versionID, converted)
+	return s.render(ctx, workspaceID, versionID, converted)
 }
 
 func (s *Service) RenderEnvironment(workspaceID, promptID, environment string, variables map[string]any) (string, error) {
@@ -147,25 +156,25 @@ func (s *Service) RenderEnvironment(workspaceID, promptID, environment string, v
 	if versionID == "" {
 		return "", fmt.Errorf("prompt %s has no version in %s", promptID, environment)
 	}
-	return s.render(workspaceID, versionID, variables)
+	return s.render(context.Background(), workspaceID, versionID, variables)
 }
 
-func (s *Service) render(workspaceID, versionID string, variables any) (string, error) {
+func (s *Service) render(ctx context.Context, workspaceID, versionID string, variables map[string]any) (string, error) {
 	s.mu.RLock()
 	version, ok := s.versions[versionID]
+	compiled := s.compiled[versionID]
 	s.mu.RUnlock()
-	if !ok || version.WorkspaceID != workspaceID {
+	if !ok || compiled == nil || version.WorkspaceID != workspaceID {
 		return "", fmt.Errorf("prompt version %s not found", versionID)
 	}
-	parsed, err := template.New(version.Name).Option("missingkey=error").Parse(version.Template)
+	messages, err := compiled.Format(ctx, variables)
 	if err != nil {
-		return "", err
-	}
-	var output bytes.Buffer
-	if err := parsed.Execute(&output, variables); err != nil {
 		return "", fmt.Errorf("render prompt: %w", err)
 	}
-	return output.String(), nil
+	if len(messages) != 1 {
+		return "", fmt.Errorf("render prompt: expected one message, got %d", len(messages))
+	}
+	return messages[0].Content, nil
 }
 
 func (s *Service) List(_ context.Context, workspaceID string) []Version {

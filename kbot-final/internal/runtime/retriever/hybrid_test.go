@@ -78,20 +78,6 @@ func TestBM25KeywordMatch(t *testing.T) {
 	}
 }
 
-func TestRRFMergesAndDedups(t *testing.T) {
-	a := []Passage{{ChunkID: "x", DocID: "x"}, {ChunkID: "y", DocID: "y"}}
-	b := []Passage{{ChunkID: "y", DocID: "y"}, {ChunkID: "z", DocID: "z"}}
-
-	merged := rrf(a, b, 60)
-	if len(merged) != 3 {
-		t.Fatalf("expected 3 unique results, got %d", len(merged))
-	}
-	// y 在两路都靠前，应排第一。
-	if merged[0].ChunkID != "y" {
-		t.Fatalf("expected y first (appears in both lists), got %s", merged[0].ChunkID)
-	}
-}
-
 func TestIndexIdempotentOnReindex(t *testing.T) {
 	r := indexCorpus(t)
 

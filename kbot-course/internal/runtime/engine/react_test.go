@@ -4,32 +4,40 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Q1mi/kbot/internal/runtime/tooling"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
-type sequenceGenerator struct {
+type sequenceChatModel struct {
 	calls         int
 	sawToolResult bool
-	systemPrompt  string
-	toolCount     int
+	alwaysTool    bool
 }
 
-func (g *sequenceGenerator) Generate(_ context.Context, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
-	g.calls++
-	g.toolCount = len(tools)
-	if len(messages) > 0 {
-		g.systemPrompt = messages[0].Content
-	}
+func (m *sequenceChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	m.calls++
 	for _, message := range messages {
 		if message.Role == schema.Tool {
-			g.sawToolResult = true
+			m.sawToolResult = true
 		}
 	}
-	if g.calls == 1 {
-		return schema.AssistantMessage("", []schema.ToolCall{{ID: "call-1", Type: "function", Function: schema.FunctionCall{Name: "refund", Arguments: `{"order_id":"ORD-1"}`}}}), nil
+	if m.calls == 1 || m.alwaysTool {
+		return schema.AssistantMessage("", []schema.ToolCall{{
+			ID: "call-1", Type: "function",
+			Function: schema.FunctionCall{Name: "refund", Arguments: `{"order_id":"ORD-1"}`},
+		}}), nil
 	}
 	return schema.AssistantMessage("退款已提交", nil), nil
+}
+
+func (m *sequenceChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := m.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
 }
 
 type fakeToolExecutor struct{ call tooling.Call }
@@ -39,20 +47,29 @@ func (f *fakeToolExecutor) Execute(_ context.Context, call tooling.Call) (toolin
 	return tooling.Result{StatusCode: 200, Body: []byte(`{"status":"submitted"}`)}, nil
 }
 
-func TestReActRunnerFeedsToolResultBackToModel(t *testing.T) {
-	gen := &sequenceGenerator{}
+func refundBinding() ToolBinding {
+	return ToolBinding{Name: "refund", VersionID: "refund-v1", Info: &schema.ToolInfo{
+		Name: "refund", Desc: "submit refund",
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"order_id": {Type: schema.String, Required: true},
+		}),
+	}}
+}
+
+func TestADKRunnerFeedsToolResultBackToModel(t *testing.T) {
+	chatModel := &sequenceChatModel{}
 	executor := &fakeToolExecutor{}
-	runner := NewReActRunner(gen, executor, "ws-1")
+	runner := NewADKRunner(chatModel, executor, "ws-1")
 	var events []string
-	answer, err := runner.Run(context.Background(), []*schema.Message{schema.UserMessage("退款")}, []ToolBinding{{Name: "refund", VersionID: "refund-v1", Info: &schema.ToolInfo{}}}, 4, func(event Event) error {
+	answer, err := runner.Run(context.Background(), []*schema.Message{schema.UserMessage("退款")}, []ToolBinding{refundBinding()}, 4, func(event Event) error {
 		events = append(events, event.Type)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if answer.Content != "退款已提交" || !gen.sawToolResult {
-		t.Fatalf("answer=%q sawTool=%v", answer.Content, gen.sawToolResult)
+	if answer.Content != "退款已提交" || !chatModel.sawToolResult {
+		t.Fatalf("answer=%q sawTool=%v", answer.Content, chatModel.sawToolResult)
 	}
 	if executor.call.ToolVersionID != "refund-v1" || executor.call.IdempotencyKey != "react:call-1" {
 		t.Fatalf("call = %+v", executor.call)
@@ -62,28 +79,12 @@ func TestReActRunnerFeedsToolResultBackToModel(t *testing.T) {
 	}
 }
 
-func TestReActRunnerStopsAtMaxSteps(t *testing.T) {
-	gen := GeneratorFunc(func(context.Context, []*schema.Message, []*schema.ToolInfo) (*schema.Message, error) {
-		return schema.AssistantMessage("", []schema.ToolCall{{ID: "again", Function: schema.FunctionCall{Name: "loop", Arguments: `{}`}}}), nil
-	})
-	_, err := NewReActRunner(gen, &fakeToolExecutor{}, "ws").Run(context.Background(), nil, []ToolBinding{{Name: "loop", VersionID: "v1", Info: &schema.ToolInfo{}}}, 2, nil)
+func TestADKRunnerStopsAtMaxSteps(t *testing.T) {
+	chatModel := &sequenceChatModel{alwaysTool: true}
+	_, err := NewADKRunner(chatModel, &fakeToolExecutor{}, "ws").Run(
+		context.Background(), nil, []ToolBinding{refundBinding()}, 2, nil,
+	)
 	if err == nil {
 		t.Fatal("expected max-step error")
-	}
-}
-
-type GeneratorFunc func(context.Context, []*schema.Message, []*schema.ToolInfo) (*schema.Message, error)
-
-func (f GeneratorFunc) Generate(ctx context.Context, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
-	return f(ctx, messages, tools)
-}
-
-func TestSkillKnowledgeBaseAllowlistIsEnforcedBeforeExecution(t *testing.T) {
-	binding := ToolBinding{Name: "search_knowledge_base", KBScoped: true, RestrictKBs: true, AllowedKBs: []string{"kb-allowed"}}
-	if err := validateBindingCall(binding, []byte(`{"kb_id":"kb-allowed"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateBindingCall(binding, []byte(`{"kb_id":"kb-other"}`)); err == nil {
-		t.Fatal("expected cross-KB call to fail")
 	}
 }

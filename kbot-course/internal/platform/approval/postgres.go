@@ -42,6 +42,18 @@ func (s *Service) decidePostgres(ctx context.Context, workspaceID, requestID, ac
 	return nil
 }
 
+func (s *Service) saveCheckpointPostgres(ctx context.Context, workspaceID, requestID string, checkpoint []byte) error {
+	command, err := s.pool.Exec(ctx, `UPDATE approval_requests SET checkpoint=$3
+		WHERE workspace_id=$1 AND id=$2 AND status='pending'`, workspaceID, requestID, checkpoint)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("approval checkpoint lost CAS")
+	}
+	return nil
+}
+
 func (s *Service) claimPostgres(ctx context.Context, workspaceID, requestID, runID, toolCallID, toolVersionID, workerID string, hash [32]byte, duration time.Duration) (*Lease, error) {
 	row := s.pool.QueryRow(ctx, `UPDATE approval_requests SET
 		status='executing',lease_owner=$8,lease_until=now()+$9::interval,

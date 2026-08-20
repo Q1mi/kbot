@@ -1,7 +1,7 @@
 package integration_test
 
 // 人在环审批闭环 E2E：敏感工具触发暂停，批准后从 checkpoint 续跑完成。
-// 跑在内存 platform + 脚本化生成器上,无需真实 LLM。复用 e2e_test.go 里的 scriptedGen
+// 跑在内存 platform + 脚本化 ChatModel上,无需真实 LLM。复用 e2e_test.go 里的 scriptedChatModel
 //(第 1 次有工具时调工具、第 2 次给最终回答)。
 
 import (
@@ -57,7 +57,7 @@ func TestSensitiveToolApprovalE2E(t *testing.T) {
 		t.Fatalf("create agent: %v", err)
 	}
 
-	eng := engine.NewEngineWithGenerator(plat.Agent, &scriptedGen{}, plat.Registry).
+	eng := engine.NewEngineWithChatModel(plat.Agent, &scriptedChatModel{}, plat.Registry).
 		WithGuard(plat.Guard).WithAudit(plat.Audit).
 		WithApprovals(plat.ApprovalGate())
 

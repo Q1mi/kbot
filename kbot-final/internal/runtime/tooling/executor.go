@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/eino-contrib/jsonschema"
 	"github.com/xeipuuv/gojsonschema"
@@ -30,10 +31,33 @@ type BuiltTool struct {
 	Name            string
 	Info            *schema.ToolInfo
 	Executor        Executor
+	Tool            einotool.InvokableTool    // Eino ToolsNode/ADK 的标准执行入口
 	Sensitive       bool                      // 敏感工具调用前需人在环审批
 	RequiresNetwork bool                      // REST/MCP/A2A 出网工具受 Agent 网络策略约束
 	KBScoped        bool                      // search_knowledge_base 受 Agent/Skill KB allowlist 约束
 	ApprovalUI      a2ui.ApprovalPresentation // JSON Schema x-kbot-approval 展示元数据
+}
+
+// InvokableTool 使用给定的 ToolInfo 构造 Eino 标准工具。传 nil 时沿用注册表中的描述。
+// Runtime 可借此按 Agent/Skill 的知识库授权收窄参数枚举，同时复用同一个执行器。
+func (b *BuiltTool) InvokableTool(info *schema.ToolInfo) einotool.InvokableTool {
+	if info == nil {
+		info = b.Info
+	}
+	return &executorInvokableTool{info: info, executor: b.Executor}
+}
+
+type executorInvokableTool struct {
+	info     *schema.ToolInfo
+	executor Executor
+}
+
+func (t *executorInvokableTool) Info(context.Context) (*schema.ToolInfo, error) {
+	return t.info, nil
+}
+
+func (t *executorInvokableTool) InvokableRun(ctx context.Context, arguments string, _ ...einotool.Option) (string, error) {
+	return t.executor.Execute(ctx, json.RawMessage(arguments))
 }
 
 // SandboxRunner 抽象 code_execution 类工具的沙箱执行能力（避免 import 环）。
@@ -95,12 +119,14 @@ func (r *Registry) Build(ctx context.Context, toolID string) (*BuiltTool, error)
 		return nil, fmt.Errorf("build tool info: %w", err)
 	}
 
-	return &BuiltTool{
+	built := &BuiltTool{
 		Name: t.Name, Info: info, Executor: exec, Sensitive: t.Sensitive,
 		RequiresNetwork: sourceRequiresNetwork(cfg.SourceType),
 		KBScoped:        isKBScopedTool(cfg),
 		ApprovalUI:      approvalPresentation(cfg.Schema),
-	}, nil
+	}
+	built.Tool = built.InvokableTool(nil)
+	return built, nil
 }
 
 // BuildByVersion 按【工具版本 ID】构造执行器:用于 Agent 快照里 pin 死的工具版本。
@@ -132,12 +158,14 @@ func (r *Registry) BuildByVersion(ctx context.Context, toolVersionID string) (*B
 		return nil, fmt.Errorf("build tool info: %w", err)
 	}
 
-	return &BuiltTool{
+	built := &BuiltTool{
 		Name: t.Name, Info: info, Executor: exec, Sensitive: t.Sensitive,
 		RequiresNetwork: sourceRequiresNetwork(cfg.SourceType),
 		KBScoped:        isKBScopedTool(cfg),
 		ApprovalUI:      approvalPresentation(cfg.Schema),
-	}, nil
+	}
+	built.Tool = built.InvokableTool(nil)
+	return built, nil
 }
 
 func approvalPresentation(schema map[string]any) a2ui.ApprovalPresentation {

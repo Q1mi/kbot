@@ -1,6 +1,6 @@
 -- 000008_llm_gateway:LLM 网关 + 数据分级路由(设计文档 §4.6 / §5 LLM Gateway)
 -- model_call_logs 按 created_at 月度分区，default 分区承接超出预创建范围的数据。
--- worker 的 maintenance 任务负责创建后续分区。
+-- worker 的 maintenance 任务负责创建后续分区。见 ADR 0007。
 
 CREATE TABLE providers (
     id             UUID PRIMARY KEY,

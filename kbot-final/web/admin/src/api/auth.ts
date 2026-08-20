@@ -1,5 +1,4 @@
-import axios from 'axios'
-import { api, getAPIErrorMessage } from './client'
+import { api } from './client'
 import type { User } from '@/store/authStore'
 
 export interface LoginRequest {
@@ -11,13 +10,6 @@ export interface LoginResponse {
   token: string
   expires_at: string
   user: User
-}
-
-export function getLoginErrorMessage(error: unknown) {
-  if (axios.isAxiosError(error) && error.response?.status === 401) {
-    return '邮箱或密码错误'
-  }
-  return getAPIErrorMessage(error, '登录失败，请稍后重试')
 }
 
 export async function login(req: LoginRequest): Promise<LoginResponse> {

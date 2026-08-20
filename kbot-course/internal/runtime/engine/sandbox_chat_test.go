@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/Q1mi/kbot/internal/domain"
@@ -11,12 +12,12 @@ import (
 	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
-type codeToolGenerator struct {
+type codeToolChatModel struct {
 	calls         int
 	sawToolResult bool
 }
 
-func (g *codeToolGenerator) Generate(_ context.Context, messages []*schema.Message, _ []*schema.ToolInfo) (*schema.Message, error) {
+func (g *codeToolChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...model.Option) (*schema.Message, error) {
 	g.calls++
 	for _, message := range messages {
 		if message.Role == schema.Tool && message.Content == "42\n" {
@@ -30,6 +31,14 @@ func (g *codeToolGenerator) Generate(_ context.Context, messages []*schema.Messa
 		}}), nil
 	}
 	return schema.AssistantMessage("计算结果是 42", nil), nil
+}
+
+func (g *codeToolChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := g.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
 }
 
 type classroomSandbox struct {
@@ -58,9 +67,9 @@ func TestChatStreamRunsPinnedCodeToolThroughSandbox(t *testing.T) {
 			MaxSteps: 4, ToolVersionIDs: []string{"python-v1"},
 		}},
 	}
-	generator := &codeToolGenerator{}
+	chatModel := &codeToolChatModel{}
 	runner := &classroomSandbox{}
-	runtime := New(controlPlane, generator).WithTools(tooling.NewExecutor(registry, nil).WithSandbox(runner))
+	runtime := New(controlPlane, chatModel).WithTools(tooling.NewExecutor(registry, nil).WithSandbox(runner))
 
 	var answer string
 	if err := runtime.ChatStream(t.Context(), ChatRequest{
@@ -76,7 +85,7 @@ func TestChatStreamRunsPinnedCodeToolThroughSandbox(t *testing.T) {
 	if runner.language != "python" || runner.code != "print(6 * 7)" {
 		t.Fatalf("sandbox call = %q / %q", runner.language, runner.code)
 	}
-	if !generator.sawToolResult || answer != "计算结果是 42" {
-		t.Fatalf("saw tool result = %t, answer = %q", generator.sawToolResult, answer)
+	if !chatModel.sawToolResult || answer != "计算结果是 42" {
+		t.Fatalf("saw tool result = %t, answer = %q", chatModel.sawToolResult, answer)
 	}
 }

@@ -1,6 +1,6 @@
 # kbot-final：Go 企业级 AI Agent 稳定版
 
-kbot-final 是课程完成后的稳定版 Agent 平台，覆盖 Agent 控制面、ReAct 运行时、知识库、工具与 Skills、人在环审批、评测、安全、审计和可观测性，并提供可复现的 Docker Compose 环境。仓库内的跨境电商与保险项目采用独立 Go Module，通过标准 Tool 协议接入平台。
+kbot-final 是课程完成后的稳定版 Agent 平台，覆盖 Agent 控制面、Eino ADK 运行时、知识库、工具与 Skills、人在环审批、评测、安全、审计和可观测性，并提供可复现的 Docker Compose 环境。仓库内的跨境电商与保险项目采用独立 Go Module，通过标准 Tool 协议接入平台。
 
 项目使用 Go 1.26.5、Eino、chi、PostgreSQL、pgvector、Redis、Asynq、MinIO、OpenTelemetry、Langfuse、React 与 Ant Design。当前代码定位为可运行、可测试、可演示的企业工程基线；生产部署仍需结合组织要求补充 SSO、密钥托管、网络策略、HA、备份与灾备。
 
@@ -81,12 +81,12 @@ Workspace 已接入成员管理与请求期 RBAC。平台管理员可治理全�
 
 | 方向 | 项目实现 |
 |---|---|
-| Agent 运行时 | 基于 Eino ChatModel 实现可测试的 ReAct 循环、Function Calling、最大步数控制、SSE/WS 流式输出与上下文取消传播 |
+| Agent 运行时 | 基于 Eino v0.9.15 `ChatModelAgent + Runner + ToolsNode` 实现 ReAct、Function Calling、最大步数、模型重试/故障转移、SSE/WS 流式输出与上下文取消传播 |
 | 控制面设计 | Prompt、Tool、Skill、Agent、Team 和 Model Profile 采用不可变版本与环境指针；Tool 发布门禁按版本绑定试调记录，Team 版本可提升到 dev/staging/prod，Conversation 固化实际运行配置 |
 | 多模型治理 | Workspace 级 Provider Account、AES-GCM 密钥加密、Deployment/Profile 主备路由、数据分级、项目环境绑定、RPM/TPM/月预算强制执行与模型调用归因 |
-| 工具生态 | 用统一 Executor/Factory 接入 REST、内部 SDK、独立代码 Sandbox、MCP Streamable HTTP 与 A2A v1.0.1；stdio 协议代码只在隔离 Runner/测试边界复用 |
-| 企业 RAG | Markdown Connector、内容哈希增量同步、Asynq 异步 ingest、PostgreSQL FTS + pgvector + RRF 混合检索与三档检索 Playground |
-| 人在环审批 | 敏感 Tool 触发 checkpoint、Approval 与 A2UI 受控组件；checkpoint 按 approval ID 唯一绑定，审批 action 经身份和 Workspace 校验后由 Worker 安全续跑 |
+| 工具生态 | 平台 Executor 通过 Eino `InvokableTool` 接入 `ToolsNode`；REST、内部 SDK、独立 Sandbox、官方 MCP Tool Adapter 与 A2A v1.0.1 共用治理链 |
+| 企业 RAG | Markdown Connector、内容哈希增量同步、Asynq 异步 ingest、Eino Retriever Router、PostgreSQL FTS + pgvector + RRF 与三档检索 Playground |
+| 人在环审批 | 敏感 Tool 通过 Eino StatefulInterrupt 生成 checkpoint；approval ID 与精确 interrupt address 绑定，Worker 用 `ResumeWithParams` 定点续跑 |
 | 可观测性 | 使用 OpenTelemetry 记录 Agent/LLM/Guard/Tool/Approval spans，通过 OTLP/HTTP 接入自托管 Langfuse，并关联 user/session/release/metadata |
 | 质量与安全 | Prompt Injection、PII、限流、持久化月度配额、工作空间动态 Guard 规则；确定性/LLM light/LLM full Judge；Eval 历史与离线 Gate |
 | 数据与任务 | 26 组 migration、sqlc、PostgreSQL/pgvector、Redis、Asynq、MinIO；审计与模型调用日志按月分区并安全归档 |
@@ -262,7 +262,7 @@ docs/                   架构、Runbook、协议集成与课堂实验
 
 ## 实现边界
 
-当前已实现并验证：PostgreSQL/pgvector/Redis 默认 Compose 装配、异步 KB、Prompt/模型/Tool/Team 版本治理、会话历史恢复、运行时 Tool/KB/网络权限、ReAct 与多源工具、动态 Guard/配额、三层 Eval Judge 与历史、MCP、A2A、飞书/Webhook 自动回复、Langfuse 和 A2UI 审批闭环。
+当前已实现并验证：PostgreSQL/pgvector/Redis 默认 Compose 装配、异步 KB、Prompt/模型/Tool/Team 版本治理、会话历史恢复、Eino ADK ReAct 与多源工具、官方 Skill Middleware、精确中断续跑、动态 Guard/配额、三层 Eval Judge 与历史、MCP、A2A、飞书/Webhook 自动回复、Langfuse 和 A2UI 审批闭环。
 
 生产部署需要结合组织环境继续补充：
 

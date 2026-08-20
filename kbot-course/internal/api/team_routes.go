@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -127,9 +126,18 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 		if runtimeteam.Mode(spec.Mode) == runtimeteam.ModePipeline {
 			final, steps, err = runtimeteam.RunPipeline(r.Context(), members, request.Input, run)
 		} else if len(members) >= 2 {
-			final, steps, err = runtimeteam.RunSupervisor(r.Context(), members[0], members[1:], request.Input, run, runtimeteam.RouteDirective, 8)
+			supervisorRuntime, ok := runtime.(interface {
+				RunSupervisorTeam(
+					context.Context, runtimeteam.Member, []runtimeteam.Member, string, runtimeteam.MemberRunner,
+				) (string, []runtimeteam.Step, error)
+			})
+			if !ok {
+				http.Error(w, "Eino supervisor runtime unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			final, steps, err = supervisorRuntime.RunSupervisorTeam(r.Context(), members[0], members[1:], request.Input, run)
 		} else {
-			err = fmt.Errorf("supervisor team needs a leader and worker")
+			err = &teamRunError{"supervisor team needs a leader and worker"}
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -138,3 +146,7 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 		writeJSON(w, http.StatusOK, map[string]any{"final": final, "steps": steps})
 	})
 }
+
+type teamRunError struct{ message string }
+
+func (e *teamRunError) Error() string { return e.message }

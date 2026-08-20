@@ -1,8 +1,8 @@
-import { Alert, Card, Form, Input, Button, Typography, message } from 'antd'
+import { Card, Form, Input, Button, Typography, message } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { Redirect, useLocation, useSearch } from 'wouter'
-import { getLoginErrorMessage, login, type LoginRequest } from '@/api/auth'
+import { login, type LoginRequest } from '@/api/auth'
 import { useAuthStore } from '@/store/authStore'
 
 export function LoginPage() {
@@ -10,7 +10,6 @@ export function LoginPage() {
   const search = useSearch()
   const { token, setAuth } = useAuthStore()
   const [loading, setLoading] = useState(false)
-  const [loginError, setLoginError] = useState('')
 
   // 已登录直接进首页。
   if (token) return <Redirect to="/agents" />
@@ -20,15 +19,14 @@ export function LoginPage() {
   const from = isInternalPath && requestedPath ? requestedPath : '/agents'
 
   async function onFinish(values: LoginRequest) {
-    setLoginError('')
     setLoading(true)
     try {
       const resp = await login(values)
       setAuth(resp.token, resp.user)
       message.success('登录成功')
       navigate(from, { replace: true })
-    } catch (error) {
-      setLoginError(getLoginErrorMessage(error))
+    } catch {
+      // 错误已由 axios 拦截器统一提示。
     } finally {
       setLoading(false)
     }
@@ -51,7 +49,6 @@ export function LoginPage() {
           </Typography.Title>
           <Typography.Text type="secondary">企业级 AI Agent 平台</Typography.Text>
         </div>
-        {loginError && <Alert type="error" showIcon message={loginError} style={{ marginBottom: 16 }} />}
         <Form layout="vertical" onFinish={onFinish} initialValues={{ email: '', password: '' }}>
           <Form.Item
             name="email"

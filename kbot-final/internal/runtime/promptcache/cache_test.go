@@ -1,13 +1,16 @@
 package promptcache
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestCompileAndRender(t *testing.T) {
 	c, err := Compile("v1", "你好 {{.name}}", `{"required":["name"]}`)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	got, err := c.Render(map[string]any{"name": "世界"})
+	got, err := c.Render(context.Background(), map[string]any{"name": "世界"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -18,7 +21,7 @@ func TestCompileAndRender(t *testing.T) {
 
 func TestRenderMissingRequired(t *testing.T) {
 	c, _ := Compile("v1", "{{.a}}", `{"required":["a"]}`)
-	if _, err := c.Render(map[string]any{}); err == nil {
+	if _, err := c.Render(context.Background(), map[string]any{}); err == nil {
 		t.Fatal("expected error for missing required var")
 	}
 }

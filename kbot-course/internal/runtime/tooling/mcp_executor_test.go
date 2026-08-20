@@ -10,48 +10,53 @@ import (
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 )
 
-func TestExecutorDispatchesAuthenticatedMCPToolWithLifecycle(t *testing.T) {
-	methods := make([]string, 0, 3)
+func TestExecutorDispatchesAuthenticatedMCPTool(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer mcp-secret" {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
 		}
 		var request struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
-		methods = append(methods, request.Method)
-		w.Header().Set("Content-Type", "application/json")
 		switch request.Method {
 		case "initialize":
-			w.Header().Set("MCP-Session-Id", "session-1")
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-11-25"}}`, request.ID)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`, request.ID)
 		case "notifications/initialized":
-			if r.Header.Get("MCP-Session-Id") != "session-1" {
-				t.Error("missing MCP session")
-			}
 			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"search","description":"search","inputSchema":{"type":"object","properties":{"q":{"type":"string"}}}}]}}`, request.ID)
 		case "tools/call":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"ok"}]}}`, request.ID)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}`, request.ID)
 		default:
 			t.Fatalf("method = %q", request.Method)
 		}
 	}))
 	defer server.Close()
 	registry := platformtool.NewRegistry()
-	config := fmt.Sprintf(`{"url":%q,"tool_name":"search"}`, server.URL)
-	if err := registry.Register(t.Context(), platformtool.Version{ID: "mcp-v1", WorkspaceID: "ws", Name: "search", SourceType: "mcp_server", InputSchema: []byte(`{"type":"object"}`), Endpoint: server.URL, EndpointConfig: config, Published: true, AuthConfig: `{"headers":{"Authorization":"Bearer mcp-secret"}}`}); err != nil {
+	endpointConfig := fmt.Sprintf(`{"url":%q,"tool_name":"search"}`, server.URL)
+	if err := registry.Register(t.Context(), platformtool.Version{
+		ID: "mcp-v1", WorkspaceID: "ws-1", Name: "mcp", SourceType: "mcp_server", Endpoint: server.URL,
+		EndpointConfig: endpointConfig,
+		Published:      true, AuthConfig: `{"headers":{"Authorization":"Bearer mcp-secret"}}`,
+		InputSchema: []byte(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	executor := NewExecutor(registry, server.Client(), "127.0.0.1")
-	result, err := executor.Execute(t.Context(), Call{WorkspaceID: "ws", ToolVersionID: "mcp-v1", Arguments: json.RawMessage(`{"q":"kbot"}`)})
-	if err != nil || len(result.Body) == 0 {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	if fmt.Sprint(methods) != "[initialize notifications/initialized tools/call]" {
-		t.Fatalf("methods=%v", methods)
+	result, err := NewExecutor(registry, server.Client(), "127.0.0.1").Execute(t.Context(), Call{
+		WorkspaceID: "ws-1", ToolVersionID: "mcp-v1", Arguments: []byte(`{"q":"kbot"}`),
+	})
+	if err != nil || result.StatusCode != http.StatusOK {
+		t.Fatalf("result = %+v, err = %v", result, err)
 	}
 }

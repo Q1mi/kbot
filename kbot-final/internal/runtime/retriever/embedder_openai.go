@@ -1,12 +1,12 @@
 package retriever
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	aclopenai "github.com/cloudwego/eino-ext/libs/acl/openai"
 )
 
 // NewEmbedder 按配置构造嵌入器。
@@ -23,61 +23,44 @@ func NewEmbedder(kind string, dim int, baseURL, apiKey, model string) (Embedder,
 		if baseURL == "" || apiKey == "" {
 			return nil, fmt.Errorf("openai embedder 需要 KBOT_LLM_BASE_URL 与 KBOT_LLM_API_KEY")
 		}
-		return &OpenAIEmbedder{baseURL: baseURL, apiKey: apiKey, model: model, dim: dim, hc: &http.Client{Timeout: 30 * time.Second}}, nil
+		client, err := aclopenai.NewEmbeddingClient(context.Background(), &aclopenai.EmbeddingConfig{
+			APIKey: apiKey, BaseURL: baseURL, Model: model,
+			HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create Eino OpenAI embedder: %w", err)
+		}
+		return &OpenAIEmbedder{client: client, dim: dim}, nil
 	default:
 		return nil, fmt.Errorf("未知 KBOT_EMBEDDER=%q(应为 local|openai)", kind)
 	}
 }
 
-// OpenAIEmbedder 调用 OpenAI 兼容的 /embeddings 端点(text-embedding-3-small 等)。
+// OpenAIEmbedder 通过 Eino OpenAI ACL 的 EmbeddingClient 调用兼容端点。
 type OpenAIEmbedder struct {
-	baseURL string
-	apiKey  string
-	model   string
-	dim     int
-	hc      *http.Client
+	client *aclopenai.EmbeddingClient
+	dim    int
 }
 
 func (e *OpenAIEmbedder) Dim() int { return e.dim }
 
 func (e *OpenAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	reqBody, err := json.Marshal(map[string]any{"model": e.model, "input": texts})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+e.apiKey)
-
-	resp, err := e.hc.Do(req)
+	embeddings, err := e.client.EmbedStrings(ctx, texts)
 	if err != nil {
 		return nil, fmt.Errorf("embeddings request: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embeddings endpoint status %d", resp.StatusCode)
+	if len(embeddings) != len(texts) {
+		return nil, fmt.Errorf("embeddings: 期望 %d 条,返回 %d 条", len(texts), len(embeddings))
 	}
-
-	var out struct {
-		Data []struct {
-			Embedding []float32 `json:"embedding"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode embeddings: %w", err)
-	}
-	if len(out.Data) != len(texts) {
-		return nil, fmt.Errorf("embeddings: 期望 %d 条,返回 %d 条", len(texts), len(out.Data))
-	}
-	vecs := make([][]float32, len(out.Data))
-	for i, d := range out.Data {
-		if len(d.Embedding) != e.dim {
-			return nil, fmt.Errorf("embeddings: 维度 %d 与配置 %d 不符", len(d.Embedding), e.dim)
+	vecs := make([][]float32, len(embeddings))
+	for i, embedding := range embeddings {
+		if len(embedding) != e.dim {
+			return nil, fmt.Errorf("embeddings: 维度 %d 与配置 %d 不符", len(embedding), e.dim)
 		}
-		vecs[i] = d.Embedding
+		vecs[i] = make([]float32, len(embedding))
+		for j, value := range embedding {
+			vecs[i][j] = float32(value)
+		}
 	}
 	return vecs, nil
 }

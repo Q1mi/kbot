@@ -1,20 +1,21 @@
 # MCP Tool 接入
 
-kbot 的 `mcp_server` Tool Client 实现 MCP 正式规范 `2025-11-25` 的两种标准传输协议：
+kbot 的 `mcp_server` Tool Client 基于 `mark3labs/mcp-go v0.58.0` 和 Eino MCP Tool Adapter，实现 MCP 正式规范 `2025-11-25` 的两种标准传输协议：
 
 - `streamable_http`：App/Worker 通过单一 MCP HTTP Endpoint 调用远端 Server；
-- `stdio`：协议实现用于单元测试和独立 Connector Runner 边界，App/Worker 的控制面会拒绝该配置。
+- `stdio`：协议实现保留给单元测试和后续独立 Connector Runner，App/Worker 的控制面会拒绝该配置。
 
 当前实现覆盖 Tool 调用需要的生命周期：
 
 ```text
 initialize
   → notifications/initialized
+  → tools/list（Eino `GetTools` 发现并筛选固定工具）
   → tools/call
-  → 关闭 HTTP session
+  → transport close
 ```
 
-客户端声明空 capabilities，因此不支持 MCP Server 反向发起 sampling、elicitation 等请求。
+Kbot 以 Tool Client 身份接入，当前没有注册 sampling、elicitation 等反向能力 Handler。
 
 ## stdio 安全边界
 
@@ -33,12 +34,12 @@ initialize
 }
 ```
 
-HTTP 客户端会：
+MCP SDK 与 Endpoint Policy 共同完成：
 
 - 在初始化响应中读取 `MCP-Session-Id`；
 - 在后续请求中发送 `MCP-Session-Id` 和 `MCP-Protocol-Version`；
-- 同时接受 `application/json` 和请求级 `text/event-stream` 响应；
-- 调用结束后尝试用 `DELETE` 关闭 session。
+- 处理 `application/json` 与请求级 `text/event-stream` 响应；
+- 调用结束后关闭 transport/session；
 - 校验 URL scheme、userinfo、DNS 解析和最终连接 IP；默认拒绝 loopback、私网、link-local、multicast 等地址，课堂内部服务需加入显式 host allowlist。
 
 ## 鉴权
@@ -67,9 +68,8 @@ Tool 的 `auth_config` 支持单 Header：
 
 ## 返回值
 
-- Text Content 会按顺序拼接；
-- `structuredContent` 会序列化为 JSON 一并返回；
-- `isError: true` 会转换为工具执行错误，让 Agent 有机会根据错误信息自愈。
+- Eino MCP Tool Adapter 将 MCP Content 转换为模型可消费的 ToolMessage 文本；
+- SDK 返回的协议错误会进入统一 Tool 错误回喂路径，Agent 可以据此调整调用。
 
 参考：
 

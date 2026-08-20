@@ -18,11 +18,12 @@ import (
 )
 
 type Deployment struct {
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	BaseURL   string `json:"base_url"`
-	APIKey    string `json:"-"`
-	HasAPIKey bool   `json:"has_api_key"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	BaseURL    string `json:"base_url"`
+	MaxRetries int    `json:"max_retries"`
+	APIKey     string `json:"-"`
+	HasAPIKey  bool   `json:"has_api_key"`
 
 	apiKeyCiphertext []byte
 }

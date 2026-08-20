@@ -1,5 +1,5 @@
 -- 000005_kb_pgvector:知识库 + pgvector(设计文档 §4.5 / §5 Knowledge Bases)
--- vector(1536) 维度固定；修改维度需要新建表并重新写入全部 KB。
+-- vector(1536) 维度硬编码,改维度需新表 + 重灌全部 KB,见 ADR 0006。
 
 CREATE EXTENSION IF NOT EXISTS vector;
 

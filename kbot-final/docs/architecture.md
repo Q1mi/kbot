@@ -13,7 +13,7 @@ kbot 是面向 Go 开发者的企业级 AI Agent 教学平台：工程师开发�
    │
 控制面 (platform)    iam / prompt / tool / skill / kb / agent / eval / audit
    │   配置快照
-数据面 (runtime)     engine(ReAct+Skill) / llm / tooling / sandbox client /
+数据面 (runtime)     engine(Eino ADK+Skill) / llm / tooling / sandbox client /
    │                 retriever / promptcache / guard / cache / team
 执行隔离             sandbox-runner → Docker daemon → 一次性 Python/Bash 容器
 基础设施 (infra)     postgres / redis / otel / jobs / metrics
@@ -24,10 +24,10 @@ kbot 是面向 Go 开发者的企业级 AI Agent 教学平台：工程师开发�
 ## 关键机制（按能力域）
 
 - **基础与接入**：IAM（JWT + 中间件链 recover→requestid→log→trace→CORS→auth→workspace）、Agent Runtime、SSE/WS 与 Docker Compose。
-- **工具与知识**：Tool Registry（rest_api/mcp_server/internal_sdk/code_execution/a2a 五源，统一 `Executor` 抽象 + Factory 路由）、独立 Sandbox Runner、KB Connector、ingest 状态机和混合检索。
-- **配置治理**：Prompt/模型不可变版本、环境基线、Candidate 灰度、Provider Account/Deployment/Profile 控制面、缓存与 Pub/Sub；Skills 分层注入；Agent/Conversation 配置快照。
+- **工具与知识**：Tool Registry（rest_api/mcp_server/internal_sdk/code_execution/a2a 五源，平台 `Executor` 适配 Eino `InvokableTool`）、独立 Sandbox Runner、KB Connector、ingest 状态机和 Eino Retriever Router 混合检索。
+- **配置治理**：Prompt/模型不可变版本、环境基线、Candidate 灰度、Provider Account/Deployment/Profile 控制面、Eino ChatTemplate、缓存与 Pub/Sub；Skills 使用 Eino Skill Middleware 渐进式披露；Agent/Conversation 配置快照。
 - **质量与安全**：Guard、Eval 门禁、Audit、Embedding/Redis 缓存、OpenTelemetry、Prometheus 与 Langfuse。
-- **开放集成**：多 Agent 编排、A2A v1.0.1、A2UI v0.9.1、飞书/Webhook、Go SDK 与 kbotctl。
+- **开放集成**：Supervisor 使用 Eino `AgentTool`，Pipeline 保持确定性顺序编排；支持 A2A v1.0.1、A2UI v0.9.1、飞书/Webhook、Go SDK 与 kbotctl。
 
 ## 数据流：一次对话
 
@@ -38,11 +38,11 @@ kbot 是面向 Go 开发者的企业级 AI Agent 教学平台：工程师开发�
   → 取/建 Conversation（pin AgentVersion，并解析 baseline/candidate）
   → 固化 PromptVersion / ModelProfileVersion / generation config / experiment variant
   → 按 pinned 版本解析快照（Prompt 渲染 / Skill specs / Tool IDs）
-  → ReAct 循环：
-        Generate(带工具) → 有 tool_calls 则执行 Tool/KB/网络权限校验并回喂
-        检测 <USE_SKILL> 则 L2 注入并限定 Tool 与 KB 范围
-        敏感 Tool → checkpoint + pending approval → SSE 发 A2UI surface → 暂停
-        A2UI action 批准 → approval ID 定位 checkpoint → Asynq worker 恢复 → 执行 Tool → 继续 Generate
+  → Eino ChatModelAgent + Runner：
+        ChatModel 识别 tool_calls → ToolsNode 执行 Tool/KB/网络权限中间件并回喂
+        Skill Middleware 暴露 L1 元数据，调用 skill 工具后加载 L2 并收窄 Tool/KB 范围
+        敏感 Tool → StatefulInterrupt + checkpoint + pending approval → SSE 发 A2UI surface
+        A2UI action 批准 → approval ID 定位 interrupt address → Worker 用 ResumeWithParams 定点恢复
   → Guard.OnOutput（出站 PII 脱敏）→ 流式 emit
   → 持久化消息 + Audit 轨迹
 ```
@@ -52,7 +52,7 @@ kbot 是面向 Go 开发者的企业级 AI Agent 教学平台：工程师开发�
 `code_execution` Tool 通过内部 HTTP 调用 `cmd/sandbox-runner`。App 与 Worker 不持有 Docker Socket；Runner 使用固定的服务端策略创建一次性容器，请求只能提交 `language` 和 `code`。
 
 ```text
-Agent ReAct → Tool Executor → Sandbox HTTP Client
+Eino ToolsNode → Tool Executor → Sandbox HTTP Client
                               ↓ Bearer Token
                        sandbox-runner
                               ↓ Docker CLI
@@ -66,7 +66,7 @@ Docker Socket 具备宿主机高权限，Runner 应部署在专用节点或开�
 ## 技术选型要点
 
 Go 1.26.5 · chi 路由 · pgx + sqlc · PostgreSQL + pgvector · go-redis · asynq · JWT · AES-GCM ·
-Eino ChatModel · OTel + Langfuse + Prometheus · A2UI v0.9.1。
+Eino v0.9.15 ChatModel / ADK · OTel + Langfuse + Prometheus · A2UI v0.9.1。
 
 ## Langfuse 与 A2UI 的边界
 

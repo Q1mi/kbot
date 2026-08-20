@@ -38,7 +38,7 @@ func TestScenarioPromptsCompileAndRender(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile system prompt: %v", err)
 			}
-			if _, err := system.Render(nil); err != nil {
+			if _, err := system.Render(context.Background(), nil); err != nil {
 				t.Fatalf("render system prompt: %v", err)
 			}
 
@@ -46,7 +46,7 @@ func TestScenarioPromptsCompileAndRender(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile user template: %v", err)
 			}
-			rendered, err := user.Render(preset.SampleVariables)
+			rendered, err := user.Render(context.Background(), preset.SampleVariables)
 			if err != nil {
 				t.Fatalf("render user template: %v", err)
 			}

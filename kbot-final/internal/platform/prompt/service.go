@@ -335,7 +335,7 @@ func (s *Service) Render(ctx context.Context, promptID, env, userID string, vars
 	}
 	// 无实验且缓存命中：走本地缓存。
 	if comp, ok := s.cache.Get(promptID, env); ok && comp.VersionID == versionID {
-		return comp.Render(vars)
+		return comp.Render(ctx, vars)
 	}
 	return s.RenderByVersion(ctx, versionID, vars)
 }
@@ -350,7 +350,7 @@ func (s *Service) RenderByVersion(ctx context.Context, versionID string, vars ma
 	if err != nil {
 		return "", err
 	}
-	return comp.Render(vars)
+	return comp.Render(ctx, vars)
 }
 
 // ListPrompts / ListVersions 透传。

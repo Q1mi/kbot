@@ -1,14 +1,14 @@
-// Package llm 把模型 SDK 收敛为 Runtime 使用的稳定接口。
+// Package llm 负责构造 Eino 标准 ChatModel 与 ADK 模型执行策略。
 package llm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
@@ -16,10 +16,16 @@ import (
 	"github.com/Q1mi/kbot/internal/platform/modelconfig"
 )
 
-// Gateway 是 Eino ChatModel 与 Agent Runtime 之间的防腐层。
-// 上层只依赖 Generate，后续更换 Provider 时无需改 Agent 循环。
+// ExecutionPlan 把主模型、重试策略和部署故障切换策略交给 Eino ADK。
+type ExecutionPlan struct {
+	Model    model.BaseChatModel
+	Retry    *adk.ModelRetryConfig
+	Failover *adk.ModelFailoverConfig[*schema.Message]
+}
+
+// Gateway 保留 Provider 构造边界，同时直接实现 Eino model.BaseChatModel。
 type Gateway struct {
-	model   model.ToolCallingChatModel
+	model   model.BaseChatModel
 	timeout time.Duration
 }
 
@@ -37,57 +43,80 @@ func NewGateway(cfg config.Config) (*Gateway, error) {
 }
 
 func (g *Gateway) Generate(
-	ctx context.Context,
-	messages []*schema.Message,
-	tools []*schema.ToolInfo,
+	ctx context.Context, messages []*schema.Message, opts ...model.Option,
 ) (*schema.Message, error) {
 	if g == nil || g.model == nil {
 		return nil, fmt.Errorf("chat model is required")
 	}
-	return generate(ctx, g.model, messages, tools)
+	response, err := g.model.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("generate response: %w", err)
+	}
+	return response, nil
 }
 
-// GenerateWithProfile 严格按照固定 Profile Version 的主备顺序调用 OpenAI 兼容部署。
-func (g *Gateway) GenerateWithProfile(ctx context.Context, profile modelconfig.ProfileVersion, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
+func (g *Gateway) Stream(
+	ctx context.Context, messages []*schema.Message, opts ...model.Option,
+) (*schema.StreamReader[*schema.Message], error) {
+	if g == nil || g.model == nil {
+		return nil, fmt.Errorf("chat model is required")
+	}
+	stream, err := g.model.Stream(ctx, messages, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("stream response: %w", err)
+	}
+	return stream, nil
+}
+
+// PrepareExecution 将固定 Model Profile 转成 Eino ADK 原生重试与故障切换配置。
+func (g *Gateway) PrepareExecution(ctx context.Context, profile modelconfig.ProfileVersion) (*ExecutionPlan, error) {
 	if g == nil || len(profile.Deployments) == 0 {
 		return nil, fmt.Errorf("model profile has no deployments")
 	}
-	var failures []error
+	models := make([]model.BaseChatModel, 0, len(profile.Deployments))
+	maxRetries := 0
 	for index, deployment := range profile.Deployments {
-		provider := strings.ToLower(strings.TrimSpace(deployment.Provider))
-		switch provider {
-		case "openai-compatible", "openai", "deepseek", "doubao":
-		default:
-			failures = append(failures, fmt.Errorf("deployment %d: unsupported provider %q", index, deployment.Provider))
-			continue
+		if !supportedProvider(deployment.Provider) {
+			return nil, fmt.Errorf("deployment %d: unsupported provider %q", index, deployment.Provider)
 		}
 		selected, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 			APIKey: deployment.APIKey, BaseURL: deployment.BaseURL, Model: deployment.Model, Timeout: g.timeout,
 		})
 		if err != nil {
-			failures = append(failures, fmt.Errorf("deployment %d: %w", index, err))
-			continue
+			return nil, fmt.Errorf("deployment %d: %w", index, err)
 		}
-		response, err := generate(ctx, selected, messages, tools)
-		if err == nil {
-			return response, nil
+		models = append(models, selected)
+		if deployment.MaxRetries > maxRetries {
+			maxRetries = deployment.MaxRetries
 		}
-		failures = append(failures, fmt.Errorf("deployment %d: %w", index, err))
 	}
-	return nil, fmt.Errorf("all deployments failed: %w", errors.Join(failures...))
+	plan := &ExecutionPlan{Model: models[0]}
+	if maxRetries > 0 {
+		plan.Retry = &adk.ModelRetryConfig{MaxRetries: maxRetries}
+	}
+	if len(models) > 1 {
+		plan.Failover = &adk.ModelFailoverConfig[*schema.Message]{
+			MaxRetries: uint(len(models) - 1),
+			ShouldFailover: func(_ context.Context, _ *schema.Message, callErr error) bool {
+				return callErr != nil
+			},
+			GetFailoverModel: func(_ context.Context, failover *adk.FailoverContext[*schema.Message]) (model.BaseChatModel, []*schema.Message, error) {
+				index := int(failover.FailoverAttempt)
+				if index <= 0 || index >= len(models) {
+					return nil, nil, fmt.Errorf("model failover attempt %d is out of range", index)
+				}
+				return models[index], nil, nil
+			},
+		}
+	}
+	return plan, nil
 }
 
-func generate(ctx context.Context, selected model.ToolCallingChatModel, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
-	if len(tools) > 0 {
-		bound, err := selected.WithTools(tools)
-		if err != nil {
-			return nil, fmt.Errorf("bind tools: %w", err)
-		}
-		selected = bound
+func supportedProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai-compatible", "openai", "deepseek", "doubao":
+		return true
+	default:
+		return false
 	}
-	response, err := selected.Generate(ctx, messages)
-	if err != nil {
-		return nil, fmt.Errorf("generate response: %w", err)
-	}
-	return response, nil
 }

@@ -1,14 +1,15 @@
-// Package engine 实现带工具调用、Skill 激活、审批续跑与配置快照的 ReAct 运行时。
+// Package engine 基于 Eino ADK 实现工具调用、Skill 激活、审批续跑与配置快照运行时。
 package engine
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/cloudwego/eino/components/model"
+	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/eino-contrib/jsonschema"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,16 +24,15 @@ import (
 	"github.com/Q1mi/kbot/internal/util"
 )
 
-// Generator 抽象"给定消息+工具产出一条助手消息"的能力。*llm.Gateway 满足它；
-// 抽成接口便于在不依赖真实 LLM 的情况下单测 ReAct + Skill 循环。
-type Generator interface {
-	Generate(ctx context.Context, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error)
+type executionPlanner interface {
+	PrepareExecution(context.Context) (*llm.ExecutionPlan, error)
 }
 
 // Engine Runtime引擎
 type Engine struct {
 	platform     Platform
-	gen          Generator
+	model        model.BaseChatModel // 单元测试/内嵌场景使用；生产环境由 planner 解析 Model Profile
+	planner      executionPlanner
 	tools        *tooling.Registry
 	guard        Guarder
 	audit        AuditRecorder
@@ -99,12 +99,12 @@ type ToolAuditRecorder interface {
 
 // NewEngine 创建Runtime引擎。tools 可为 nil（无工具时退化为纯对话）。
 func NewEngine(platform Platform, llmGW *llm.Gateway, tools *tooling.Registry) *Engine {
-	return &Engine{platform: platform, gen: llmGW, tools: tools}
+	return &Engine{platform: platform, planner: llmGW, tools: tools}
 }
 
-// NewEngineWithGenerator 用自定义 Generator 构造引擎（多 Agent member runner / 测试用）。
-func NewEngineWithGenerator(platform Platform, gen Generator, tools *tooling.Registry) *Engine {
-	return &Engine{platform: platform, gen: gen, tools: tools}
+// NewEngineWithChatModel 用 Eino 标准 ChatModel 构造引擎，供测试和内嵌运行使用。
+func NewEngineWithChatModel(platform Platform, chatModel model.BaseChatModel, tools *tooling.Registry) *Engine {
+	return &Engine{platform: platform, model: chatModel, tools: tools}
 }
 
 // Chat 同步跑一次对话，收敛流式事件为最终文本（Team member runner / eval target / kbotctl 用）。
@@ -257,7 +257,7 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatStreamRequest) (<-chan 
 		_ = turns.ReleaseConversationTurn(releaseCtx, conv.ID, turnToken, "active")
 	}
 
-	allInfos, execByName, policies, err := e.buildTools(ctx, snapshot.ToolVersionIDs, snapshot.KBIDs)
+	_, _, policies, err := e.buildTools(ctx, snapshot.ToolVersionIDs, snapshot.KBIDs)
 	if err != nil {
 		releaseClaim()
 		return nil, fmt.Errorf("build tools: %w", err)
@@ -383,17 +383,21 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatStreamRequest) (<-chan 
 		}
 
 		messages := buildMessages(snapshot, history, userMsg)
-		ls := &loopState{
-			convID: conv.ID, workspaceID: conv.WorkspaceID, messages: messages, allInfos: allInfos, execByName: execByName,
-			policies: policies, skills: snapshot.Skills, agentKBs: stringSet(snapshot.KBIDs),
-			allowNetwork: snapshot.AllowNetwork, maxSteps: maxStepsOf(snapshot),
+		answer, interrupts, checkpoint, runErr := e.runWithADK(
+			ctx, snapshot, messages, policies, conv.ID, conv.WorkspaceID, em,
+		)
+		if runErr != nil {
+			traceErr = runErr
+			em.send(AgentEvent{Type: EventError, Text: runErr.Error()})
+			return
 		}
-		// disable-model-invocation 的 Skill 只接受用户显式标签触发。
-		if name, ok := skillrunner.DetectExplicit(userMsg, snapshot.Skills); ok {
-			e.activateSkill(ctx, ls, name, false, em)
-		}
-		answer, runErr := e.runLoop(ctx, ls, em)
-		if errors.Is(runErr, errAwaitApproval) {
+		if len(interrupts) > 0 {
+			if err := persistApprovalInterrupts(ctx, e.approvals, conv.ID, checkpoint, interrupts); err != nil {
+				traceErr = err
+				em.send(AgentEvent{Type: EventError, Text: err.Error()})
+				return
+			}
+			emitApprovalEvents(e, em, interrupts, policies)
 			releaseStatus = "awaiting_approval"
 			if err := e.commitConversationTurn(ctx, turns, conv.ID, turnToken, []*domain.Message{{
 				ID: util.GenerateID(), ConversationID: conv.ID, Role: "user", Content: userMsg,
@@ -406,11 +410,6 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatStreamRequest) (<-chan 
 			e.recordAudit(ctx, conv.ID, req.UserID, "await_approval", "")
 			em.send(AgentEvent{Type: EventDone, Data: RunFinished{Status: RunStatusAwaitingApproval}})
 			traceOutput = "awaiting approval"
-			return
-		}
-		if runErr != nil {
-			traceErr = runErr
-			em.send(AgentEvent{Type: EventError, Text: runErr.Error()})
 			return
 		}
 
@@ -555,7 +554,7 @@ func (e *Engine) recordAudit(ctx context.Context, convID, actor, action, detail 
 	}
 }
 
-// guardLLMCall / guardToolCalls 通过可选接口执行限流和配额检查。
+// guardLLMCall 由 ADK ChatModelAgent 的模型调用中间件执行限流和配额检查。
 func (e *Engine) guardLLMCall(ctx context.Context) error {
 	if g, ok := e.guard.(interface {
 		OnLLMCall(context.Context) error
@@ -565,370 +564,13 @@ func (e *Engine) guardLLMCall(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) guardToolCalls(ctx context.Context, resp *schema.Message) error {
-	g, ok := e.guard.(interface {
-		OnToolCall(context.Context, string) error
-	})
-	if !ok {
-		return nil
-	}
-	for _, tc := range resp.ToolCalls {
-		if err := g.OnToolCall(ctx, tc.Function.Name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// loopState 是 ReAct 循环的可变状态。
-type loopState struct {
-	convID       string
-	workspaceID  string
-	messages     []*schema.Message
-	allInfos     []*schema.ToolInfo
-	execByName   map[string]tooling.Executor
-	policies     toolPolicies
-	skills       []skillrunner.Spec
-	activeSkill  *skillrunner.Spec
-	activeInfos  []*schema.ToolInfo // nil 表示全量工具；非 nil 表示被 Skill 限定的范围
-	agentKBs     map[string]bool
-	activeKBs    map[string]bool
-	allowNetwork bool
-	skillsOff    bool // 白名单回退后不再尝试 Skill 注入
-	skillFails   int
-	maxSteps     int
-}
-
 type toolPolicies struct {
+	tools           []einotool.BaseTool
 	sensitive       map[string]bool
 	requiresNetwork map[string]bool
 	kbScoped        map[string]bool
 	approvalUI      map[string]a2ui.ApprovalPresentation
 	versionIDs      map[string]string
-}
-
-// runLoop 跑 ReAct + Skill 循环。
-func (e *Engine) runLoop(ctx context.Context, ls *loopState, em emitter) (string, error) {
-	steps := ls.maxSteps
-	if steps <= 0 {
-		steps = defaultMaxSteps
-	}
-	for step := 0; step < steps; step++ {
-		// 客户端断开 / 超时即止,别再白白调模型与工具。
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-
-		infos := ls.allInfos
-		if ls.activeInfos != nil {
-			infos = ls.activeInfos
-		}
-
-		// 调用模型前执行限流与配额检查。
-		if err := e.guardLLMCall(ctx); err != nil {
-			return "", err
-		}
-		if err := validateToolCallResponses(ls.messages); err != nil {
-			return "", fmt.Errorf("invalid model message sequence: %w", err)
-		}
-		resp, err := e.gen.Generate(ctx, ls.messages, infos)
-		if err != nil {
-			return "", err
-		}
-		ls.messages = append(ls.messages, resp)
-
-		// 1) 有工具调用：先过限流 + 审批门(敏感工具暂停),再执行回喂。
-		if len(resp.ToolCalls) > 0 {
-			if e.rejectUnauthorizedToolCalls(ls, resp, em) {
-				continue
-			}
-			if err := e.guardToolCalls(ctx, resp); err != nil {
-				return "", err
-			}
-			paused, err := e.pauseIfSensitive(ctx, ls, resp, em)
-			if err != nil {
-				return "", err
-			}
-			if paused {
-				return "", errAwaitApproval
-			}
-			if err := e.executeToolBatch(ctx, ls, resp, em); err != nil {
-				return "", err
-			}
-			continue
-		}
-
-		// 2) 无工具调用：检查是否触发了 Skill。
-		if !ls.skillsOff && len(ls.skills) > 0 {
-			if name, ok := skillrunner.Detect(resp.Content); ok {
-				if handled := e.activateSkill(ctx, ls, name, true, em); handled {
-					continue
-				}
-			}
-		}
-
-		// 3) 最终回答。延后到 OnOutput 脱敏之后再 emit（见 ChatStream）。
-		return resp.Content, nil
-	}
-	return "", fmt.Errorf("reached max steps (%d) without final answer", steps)
-}
-
-// executeToolBatch 执行一批工具调用并把结果回喂 messages(不做审批暂停;暂停由 pauseIfSensitive 负责)。
-// 返回非 nil 错误表示 ctx 已取消(客户端断开/超时),调用方应停止续跑。
-func (e *Engine) executeToolBatch(ctx context.Context, ls *loopState, resp *schema.Message, em emitter) error {
-	for _, tc := range resp.ToolCalls {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		name := tc.Function.Name
-		metrics.ToolCalls.WithLabelValues(name).Inc()
-		if !em.send(AgentEvent{Type: EventToolCall, Text: name, Data: json.RawMessage(tc.Function.Arguments)}) {
-			return em.ctx.Err()
-		}
-
-		toolCtx, toolSpan := startOperationSpan(ctx, "tool.execute",
-			attribute.String("gen_ai.tool.name", name),
-			attribute.String("tool.call.id", tc.ID),
-		)
-		if e.traceOptions.CaptureContent {
-			toolSpan.SetAttributes(attribute.String("langfuse.observation.input", tc.Function.Arguments))
-		}
-		result := ""
-		var toolErr error
-		invocationID := ""
-		startedAt := time.Now()
-		if e.toolAudit != nil {
-			var auditErr error
-			invocationID, auditErr = e.toolAudit.BeginToolInvocation(
-				context.WithoutCancel(ctx), ls.workspaceID, ls.convID, tc.ID,
-				ls.policies.versionIDs[name], tc.Function.Arguments,
-			)
-			if auditErr != nil {
-				finishOperationSpan(toolCtx, toolSpan, "", auditErr)
-				return auditErr
-			}
-			toolCtx = tooling.WithSandboxObserver(toolCtx, func(sandboxResult tooling.SandboxResult, runErr error) error {
-				status := "success"
-				if sandboxResult.TimedOut {
-					status = "timeout"
-				} else if runErr != nil {
-					status = "error"
-				}
-				return e.toolAudit.RecordSandboxExecution(context.WithoutCancel(ctx), &domain.SandboxExecution{
-					WorkspaceID: ls.workspaceID, ConversationID: ls.convID, InvocationID: invocationID,
-					ToolVersionID: ls.policies.versionIDs[name], ToolCallID: tc.ID,
-					ExecutionID: sandboxResult.ExecutionID, Language: sandboxResult.Language,
-					ContainerID: sandboxResult.ContainerName, ExitCode: sandboxResult.ExitCode,
-					Stdout: sandboxResult.Stdout, Stderr: sandboxResult.Stderr, DurationMS: sandboxResult.DurationMS,
-					TimedOut: sandboxResult.TimedOut, OutputTruncated: sandboxResult.OutputTruncated, Status: status,
-				})
-			})
-		}
-		exec, ok := ls.execByName[name]
-		if !ok {
-			result = fmt.Sprintf("error: tool %q not available", name)
-			toolErr = fmt.Errorf("tool %q not available", name)
-		} else if policyErr := ls.toolPolicyError(name, tc.Function.Arguments); policyErr != nil {
-			// Skill 激活期间，超出 allowed-tools 的工具被拒（纵深防御，讲义 §14.5）。
-			result = "error: " + policyErr.Error()
-			toolErr = policyErr
-		} else {
-			out, execErr := exec.Execute(toolCtx, json.RawMessage(tc.Function.Arguments))
-			if execErr != nil {
-				result = "error: " + execErr.Error()
-				toolErr = execErr
-			} else {
-				result = out
-			}
-		}
-		if e.toolAudit != nil {
-			if auditErr := e.toolAudit.CompleteToolInvocation(
-				context.WithoutCancel(ctx), invocationID, result,
-				int(time.Since(startedAt).Milliseconds()), toolErr,
-			); auditErr != nil {
-				finishOperationSpan(toolCtx, toolSpan, result, auditErr)
-				return auditErr
-			}
-		}
-		finishOperationSpan(toolCtx, toolSpan, result, toolErr)
-		if !em.send(AgentEvent{Type: EventToolResult, Text: result, Data: name}) {
-			return em.ctx.Err()
-		}
-		ls.messages = append(ls.messages, schema.ToolMessage(result, tc.ID))
-	}
-	return nil
-}
-
-// activateSkill 处理 <USE_SKILL> 触发；返回 true 表示已处理（应继续循环）。
-// 三层兜底之"白名单回退"：连续两次触发了不存在的技能则关闭 Skill 注入。
-func (e *Engine) activateSkill(ctx context.Context, ls *loopState, name string, modelInitiated bool, em emitter) bool {
-	spec, ok := skillrunner.Find(ls.skills, name)
-	if !ok {
-		ls.skillFails++
-		if ls.skillFails >= 2 {
-			ls.skillsOff = true
-			return false // 回退：把这轮内容当最终回答处理
-		}
-		// 自愈：提示模型重试。
-		ls.messages = append(ls.messages, schema.UserMessage(
-			fmt.Sprintf("技能 %q 不存在，请从可用技能里选择，或直接回答。", name)))
-		return true
-	}
-	if modelInitiated && spec.DisableModelInvocation {
-		ls.messages = append(ls.messages, schema.UserMessage(
-			fmt.Sprintf("技能 %q 仅允许用户显式触发，请直接回答或选择其他可自动调用的技能。", name)))
-		return true
-	}
-	if spec.RequiresNetwork && !ls.allowNetwork {
-		ls.messages = append(ls.messages, schema.UserMessage(
-			fmt.Sprintf("技能 %q 需要网络访问，但当前 Agent 版本未授权网络，请说明无法执行。", name)))
-		return true
-	}
-
-	metrics.SkillTriggers.Inc()
-	em.send(AgentEvent{Type: EventSkillTrigger, Text: spec.Name})
-	// L2 注入：body 作为新的 system 消息进上下文。
-	ls.messages = append(ls.messages, schema.SystemMessage(skillrunner.L2Message(spec)))
-	// 工具范围临时切到该 Skill 的 allowed-tools。
-	ls.activeInfos = filterInfos(ls.allInfos, spec.AllowedTools)
-	ls.activeSkill = &spec
-	ls.activeKBs = stringSet(spec.AllowedKBs)
-	if e.audit != nil {
-		source := "user"
-		if modelInitiated {
-			source = "model"
-		}
-		e.audit.RecordSkillTrigger(ctx, ls.workspaceID, ls.convID, spec.VersionID, spec.Name, source)
-	}
-	return true
-}
-
-func (ls *loopState) toolAllowed(name string) bool {
-	if ls.activeInfos == nil {
-		return true
-	}
-	for _, info := range ls.activeInfos {
-		if info.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (ls *loopState) toolPolicyError(name, arguments string) error {
-	if !ls.toolAllowed(name) {
-		return fmt.Errorf("tool %q not allowed by active skill", name)
-	}
-	if ls.policies.requiresNetwork[name] && !ls.allowNetwork {
-		return fmt.Errorf("tool %q requires network access, but the agent version does not allow it", name)
-	}
-	if !ls.policies.kbScoped[name] {
-		return nil
-	}
-	var in struct {
-		KBID string `json:"kb_id"`
-	}
-	if err := json.Unmarshal([]byte(arguments), &in); err != nil || in.KBID == "" {
-		return fmt.Errorf("tool %q requires a valid kb_id", name)
-	}
-	if !ls.agentKBs[in.KBID] {
-		return fmt.Errorf("knowledge base %q is not attached to the agent", in.KBID)
-	}
-	if ls.activeSkill != nil && !ls.activeKBs[in.KBID] {
-		return fmt.Errorf("knowledge base %q is not allowed by active skill %q", in.KBID, ls.activeSkill.Name)
-	}
-	return nil
-}
-
-// rejectUnauthorizedToolCalls 在审批和实际执行前做 fail-closed 策略校验。
-func (e *Engine) rejectUnauthorizedToolCalls(ls *loopState, resp *schema.Message, em emitter) bool {
-	denied := make(map[string]string)
-	for _, tc := range resp.ToolCalls {
-		if _, ok := ls.execByName[tc.Function.Name]; !ok {
-			continue
-		}
-		if err := ls.toolPolicyError(tc.Function.Name, tc.Function.Arguments); err != nil {
-			denied[tc.ID] = "error: " + err.Error()
-		}
-	}
-	if len(denied) == 0 {
-		return false
-	}
-
-	// OpenAI 兼容协议要求 assistant 返回的每个 tool_call_id 都紧跟一条
-	// tool 消息。整批中任一调用越权时采用全批拒绝，既避免部分副作用，
-	// 也保证并行 Tool Call 的消息序列完整。
-	const batchRejected = "error: tool batch rejected because another call violated agent policy"
-	for _, tc := range resp.ToolCalls {
-		result := denied[tc.ID]
-		if result == "" {
-			result = batchRejected
-		}
-		em.send(AgentEvent{Type: EventToolCall, Text: tc.Function.Name, Data: json.RawMessage(tc.Function.Arguments)})
-		em.send(AgentEvent{Type: EventToolResult, Text: result, Data: tc.Function.Name})
-		ls.messages = append(ls.messages, schema.ToolMessage(result, tc.ID))
-	}
-	return true
-}
-
-// validateToolCallResponses 在请求模型前校验 OpenAI 兼容消息约束：一条
-// assistant tool_calls 后必须为每个调用提供且只提供一条关联 tool 消息。
-func validateToolCallResponses(messages []*schema.Message) error {
-	pending := make(map[string]struct{})
-	order := make([]string, 0)
-	pendingIDs := func() []string {
-		ids := make([]string, 0, len(pending))
-		for _, id := range order {
-			if _, ok := pending[id]; ok {
-				ids = append(ids, id)
-			}
-		}
-		return ids
-	}
-
-	for index, message := range messages {
-		if len(pending) > 0 {
-			if message.Role != schema.Tool {
-				return fmt.Errorf("missing tool responses for %s before message %d", strings.Join(pendingIDs(), ", "), index)
-			}
-			if _, ok := pending[message.ToolCallID]; !ok {
-				return fmt.Errorf("unexpected or duplicate tool response %q at message %d", message.ToolCallID, index)
-			}
-			delete(pending, message.ToolCallID)
-			continue
-		}
-		if message.Role != schema.Assistant || len(message.ToolCalls) == 0 {
-			continue
-		}
-		for _, call := range message.ToolCalls {
-			if call.ID == "" {
-				return fmt.Errorf("assistant tool call at message %d has an empty id", index)
-			}
-			if _, exists := pending[call.ID]; exists {
-				return fmt.Errorf("assistant tool call id %q is duplicated at message %d", call.ID, index)
-			}
-			pending[call.ID] = struct{}{}
-			order = append(order, call.ID)
-		}
-	}
-	if len(pending) > 0 {
-		return fmt.Errorf("missing tool responses for %s", strings.Join(pendingIDs(), ", "))
-	}
-	return nil
-}
-
-func filterInfos(all []*schema.ToolInfo, allowedNames []string) []*schema.ToolInfo {
-	allow := map[string]bool{}
-	for _, n := range allowedNames {
-		allow[n] = true
-	}
-	out := make([]*schema.ToolInfo, 0, len(allowedNames))
-	for _, info := range all {
-		if allow[info.Name] {
-			out = append(out, info)
-		}
-	}
-	return out
 }
 
 // buildTools 把快照里 pin 死的【工具版本 ID】解析成模型可见的 ToolInfo 与按名索引的执行器。
@@ -956,6 +598,7 @@ func (e *Engine) buildTools(ctx context.Context, toolVersionIDs, kbIDs []string)
 			return nil, nil, toolPolicies{}, fmt.Errorf("duplicate tool name %q in agent snapshot", bt.Name)
 		}
 		execByName[bt.Name] = bt.Executor
+		policies.tools = append(policies.tools, bt.InvokableTool(info))
 		policies.versionIDs[bt.Name] = id
 		policies.sensitive[bt.Name] = bt.Sensitive
 		policies.requiresNetwork[bt.Name] = bt.RequiresNetwork
@@ -1040,20 +683,9 @@ func stringSet(values []string) map[string]bool {
 	return out
 }
 
-// buildMessages 构建 schema.Message 列表（含 L1 技能元数据注入）。
-func buildMessages(snapshot *AgentSnapshot, history []*domain.Message, userMsg string) []*schema.Message {
+// buildMessages 构建历史消息；Agent 的 system instruction 与 Skill 渐进式披露由 Eino ADK 注入。
+func buildMessages(_ *AgentSnapshot, history []*domain.Message, userMsg string) []*schema.Message {
 	var messages []*schema.Message
-
-	system := snapshot.SystemPrompt
-	if l1 := skillrunner.BuildL1(snapshot.Skills); l1 != "" {
-		if system != "" {
-			system += "\n\n"
-		}
-		system += l1
-	}
-	if system != "" {
-		messages = append(messages, schema.SystemMessage(system))
-	}
 
 	// 最多取最近 10 条历史。
 	start := 0

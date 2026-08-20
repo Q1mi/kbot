@@ -1,4 +1,4 @@
-// 后端 domain 类型的前端镜像。使用手写类型并由 TypeScript 构建做契约检查。
+// 后端 domain 类型的前端镜像。当前按 ADR 0017 维护手写类型，并由 TypeScript 构建做契约检查。
 
 export interface Workspace {
   id: string

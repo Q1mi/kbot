@@ -6,24 +6,26 @@
 package promptcache
 
 import (
+	"context"
 	"fmt"
 	"sync"
-	"text/template"
 	"time"
+
+	einoprompt "github.com/cloudwego/eino/components/prompt"
 )
 
 // Compiled 是一个 Prompt 版本的编译产物。
 type Compiled struct {
 	VersionID    string
 	Raw          string
-	Tmpl         *template.Template
+	Tmpl         einoprompt.ChatTemplate
 	RequiredVars []string // 变量 Schema 里 required 的键(保存时解析)
 	EstTokens    int
 	UpdatedAt    time.Time
 }
 
 // Render 用给定变量渲染模板。missingkey=error 保证缺变量立刻报错而非渲染成 <no value>。
-func (c *Compiled) Render(vars map[string]any) (string, error) {
+func (c *Compiled) Render(ctx context.Context, vars map[string]any) (string, error) {
 	// 先做 required 校验，给出比 template 更清晰的错误。
 	for _, k := range c.RequiredVars {
 		if _, ok := vars[k]; !ok {
@@ -33,11 +35,14 @@ func (c *Compiled) Render(vars map[string]any) (string, error) {
 	if c.Tmpl == nil {
 		return c.Raw, nil
 	}
-	var sb stringWriter
-	if err := c.Tmpl.Execute(&sb, vars); err != nil {
+	messages, err := c.Tmpl.Format(ctx, vars)
+	if err != nil {
 		return "", fmt.Errorf("render prompt: %w", err)
 	}
-	return sb.String(), nil
+	if len(messages) != 1 {
+		return "", fmt.Errorf("render prompt: expected one message, got %d", len(messages))
+	}
+	return messages[0].Content, nil
 }
 
 // Cache 是 "promptID@env" → *Compiled 的本地缓存。
@@ -68,12 +73,3 @@ func (c *Cache) Put(promptID, env string, comp *Compiled) {
 func (c *Cache) Invalidate(promptID, env string) {
 	c.mp.Delete(key(promptID, env))
 }
-
-// stringWriter 是一个最简 io.Writer，避免引入 bytes.Buffer 的额外分配语义差异。
-type stringWriter struct{ b []byte }
-
-func (w *stringWriter) Write(p []byte) (int, error) {
-	w.b = append(w.b, p...)
-	return len(p), nil
-}
-func (w *stringWriter) String() string { return string(w.b) }

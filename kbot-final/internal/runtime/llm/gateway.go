@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/Q1mi/kbot/internal/config"
 	"github.com/Q1mi/kbot/internal/domain"
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
@@ -92,6 +94,14 @@ type Gateway struct {
 	}
 }
 
+// ExecutionPlan 把一次 Agent 运行所需的主模型、重试策略和部署故障转移策略交给 Eino ADK。
+// 模型调用的配额、计量和链路追踪仍由 Gateway 包装器统一完成。
+type ExecutionPlan struct {
+	Model    model.BaseChatModel
+	Retry    *adk.ModelRetryConfig
+	Failover *adk.ModelFailoverConfig[*schema.Message]
+}
+
 // NewGateway 创建 LLM 网关。全局云模型是旧配置的可选回退；
 // 新配置由 Model Profile 在调用时动态解析。
 func NewGateway(cfg config.Config) (*Gateway, error) {
@@ -158,69 +168,46 @@ func (g *Gateway) WithEndpointPolicy(policy interface {
 	return g
 }
 
-// ChatRequest 聊天请求。
-type ChatRequest struct {
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
-}
-
-// ChatMessage 聊天消息
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// ChatResponse 聊天响应
-type ChatResponse struct {
-	Content string `json:"content"`
-}
-
-// Chat 发起一次纯文本聊天（无工具）。
-func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	messages := make([]*schema.Message, len(req.Messages))
-	for i, msg := range req.Messages {
-		messages[i] = &schema.Message{
-			Role:    schema.RoleType(msg.Role),
-			Content: msg.Content,
-		}
-	}
-
-	p, err := g.routeFor(classificationFromContext(ctx))
-	if err != nil {
-		return nil, err
-	}
-	if p.model == nil {
-		return nil, fmt.Errorf("no model profile configured and KBOT_LLM_API_KEY fallback is empty")
-	}
-	resp, err := p.model.Generate(ctx, messages)
-	if err != nil {
-		return nil, fmt.Errorf("generate response: %w", err)
-	}
-
-	return &ChatResponse{Content: resp.Content}, nil
-}
-
-// Generate 用给定的工具集发起一次生成，返回完整的助手消息（可能带 ToolCalls）。
-// tools 非空时绑定工具供模型按需调用。
-func (g *Gateway) Generate(ctx context.Context, messages []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
+// PrepareExecution 按当前调用上下文解析 Model Profile，并生成 Eino ADK 原生执行配置。
+// 同一 Profile 中各部署的 MaxRetries 统一取最大值，作为本次 Agent 运行的模型重试预算。
+func (g *Gateway) PrepareExecution(ctx context.Context) (*ExecutionPlan, error) {
 	classification := classificationFromContext(ctx)
 	inv := invocationFromContext(ctx)
-	providers, err := g.providersFor(ctx, inv, classification)
+	candidates, err := g.providersFor(ctx, inv, classification)
 	if err != nil {
 		return nil, err
 	}
-	var lastErr error
-	for _, candidate := range providers {
-		attempts := candidate.retries + 1
-		for attempt := 0; attempt < attempts; attempt++ {
-			resp, callErr := g.generateWithProvider(ctx, candidate.provider, messages, tools, inv, classification)
-			if callErr == nil {
-				return resp, nil
-			}
-			lastErr = callErr
+
+	models := make([]model.BaseChatModel, 0, len(candidates))
+	maxRetries := 0
+	for _, candidate := range candidates {
+		models = append(models, &managedModel{
+			gateway: g, provider: candidate.provider, invocation: inv, classification: classification,
+		})
+		if candidate.retries > maxRetries {
+			maxRetries = candidate.retries
 		}
 	}
-	return nil, fmt.Errorf("generate response: %w", lastErr)
+	plan := &ExecutionPlan{Model: models[0]}
+	if maxRetries > 0 {
+		plan.Retry = &adk.ModelRetryConfig{MaxRetries: maxRetries}
+	}
+	if len(models) > 1 {
+		plan.Failover = &adk.ModelFailoverConfig[*schema.Message]{
+			MaxRetries: uint(len(models) - 1),
+			ShouldFailover: func(_ context.Context, _ *schema.Message, callErr error) bool {
+				return callErr != nil
+			},
+			GetFailoverModel: func(_ context.Context, failover *adk.FailoverContext[*schema.Message]) (model.BaseChatModel, []*schema.Message, error) {
+				index := int(failover.FailoverAttempt)
+				if index <= 0 || index >= len(models) {
+					return nil, nil, fmt.Errorf("model failover attempt %d is out of range", index)
+				}
+				return models[index], nil, nil
+			},
+		}
+	}
+	return plan, nil
 }
 
 type providerCandidate struct {
@@ -301,96 +288,143 @@ func (g *Gateway) dynamicProvider(ctx context.Context, profileID string, d Resol
 	return p, nil
 }
 
-func (g *Gateway) generateWithProvider(
-	ctx context.Context,
-	p provider,
-	messages []*schema.Message,
-	tools []*schema.ToolInfo,
-	inv InvocationConfig,
-	classification string,
-) (*schema.Message, error) {
-	m := p.model
-	if len(tools) > 0 {
-		bound, err := p.model.WithTools(tools)
-		if err != nil {
-			return nil, fmt.Errorf("bind tools: %w", err)
-		}
-		m = bound
-	}
-	reservationID := ""
-	if g.quota != nil && inv.WorkspaceID != "" && inv.ModelProfileVersionID != "" {
-		estimatedInput := estimateMessageTokens(messages)
-		estimatedOutput := 1024
-		if inv.GenerationConfig.MaxOutputTokens != nil && *inv.GenerationConfig.MaxOutputTokens > 0 {
-			estimatedOutput = *inv.GenerationConfig.MaxOutputTokens
-		}
-		estimatedCost := tokenCost(p, estimatedInput, estimatedOutput, 0)
-		env := inv.Environment
-		if env == "" {
-			env = "dev"
-		}
-		var reserveErr error
-		reservationID, reserveErr = g.quota.ReserveProjectUsage(ctx, ProjectQuotaRequest{
-			WorkspaceID: inv.WorkspaceID, Env: env, ModelProfileVersionID: inv.ModelProfileVersionID,
-			DeploymentID: p.deploymentID, ReservedTokens: estimatedInput + estimatedOutput,
-			ReservedCost: estimatedCost,
-		})
-		if reserveErr != nil {
-			return nil, reserveErr
-		}
-	}
-	var resp *schema.Message
-	start := time.Now()
-	res, err := withSpan(ctx, p.system, p.modelID, func(ctx context.Context) (callResult, error) {
-		r, err := m.Generate(ctx, messages)
-		if err != nil {
-			return callResult{}, err
-		}
-		resp = r
-		cr := callResult{}
-		if raw, marshalErr := json.Marshal(messages); marshalErr == nil {
-			cr.input = string(raw)
-		}
-		if raw, marshalErr := json.Marshal(r); marshalErr == nil {
-			cr.output = string(raw)
-		}
-		if r.ResponseMeta != nil && r.ResponseMeta.Usage != nil {
-			cr.inputTokens = r.ResponseMeta.Usage.PromptTokens
-			cr.outputTokens = r.ResponseMeta.Usage.CompletionTokens
-			cr.cachedTokens = r.ResponseMeta.Usage.PromptTokenDetails.CachedTokens
-		}
-		if r.ResponseMeta != nil {
-			cr.finishReason = r.ResponseMeta.FinishReason
-		}
-		return cr, nil
-	})
-	status := "ok"
-	if err != nil {
-		status = "error"
-	}
-	actualCost := tokenCost(p, res.inputTokens, res.outputTokens, res.cachedTokens)
-	if reservationID != "" {
-		if finalizeErr := g.quota.FinalizeProjectUsage(
-			ctx, reservationID, res.inputTokens+res.outputTokens, actualCost, err == nil,
-		); finalizeErr != nil {
-			// Provider 调用已经发生，账本保留预留值；继续返回原结果可避免上层重放计费调用。
-			log.Printf("finalize project model quota: reservation_id=%s error=%v", reservationID, finalizeErr)
-		}
-	}
-	g.sink.Record(ctx, CallUsage{
-		Provider: p.system, ProviderID: p.providerID, DeploymentID: p.deploymentID,
-		Model: p.modelID, InputTokens: res.inputTokens, OutputTokens: res.outputTokens,
-		CachedTokens: res.cachedTokens, LatencyMs: int(time.Since(start).Milliseconds()),
-		Status: status, Classification: classification, WorkspaceID: inv.WorkspaceID,
-		AgentID: inv.AgentID, UserID: inv.UserID, PromptVersionID: inv.PromptVersionID,
-		ModelProfileVersionID: inv.ModelProfileVersionID, ExperimentID: inv.ExperimentID,
-		ExperimentVariant: inv.ExperimentVariant,
-		Cost:              actualCost,
-	})
+// managedModel 是 Gateway 的治理包装器。ADK 负责 ReAct、重试和故障转移；
+// 此包装器只处理单次 Provider 调用的配额、追踪、成本和审计。
+type managedModel struct {
+	gateway        *Gateway
+	provider       provider
+	invocation     InvocationConfig
+	classification string
+}
+
+func (m *managedModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	reservationID, err := m.reserve(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	var response *schema.Message
+	startedAt := time.Now()
+	result, callErr := withSpan(ctx, m.provider.system, m.provider.modelID, func(ctx context.Context) (callResult, error) {
+		generated, err := m.provider.model.Generate(ctx, messages, opts...)
+		if err != nil {
+			return callResult{input: marshalJSON(messages)}, err
+		}
+		response = generated
+		return modelCallResult(messages, generated), nil
+	})
+	m.finish(ctx, reservationID, result, startedAt, callErr)
+	if callErr != nil {
+		return nil, callErr
+	}
+	return response, nil
+}
+
+func (m *managedModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	reservationID, err := m.reserve(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	inputStream, err := m.provider.model.Stream(ctx, messages, opts...)
+	if err != nil {
+		m.finish(ctx, reservationID, callResult{input: marshalJSON(messages)}, time.Now(), err)
+		return nil, err
+	}
+	output, writer := schema.Pipe[*schema.Message](1)
+	startedAt := time.Now()
+	go func() {
+		defer writer.Close()
+		defer inputStream.Close()
+		chunks := make([]*schema.Message, 0, 8)
+		result, callErr := withSpan(ctx, m.provider.system, m.provider.modelID, func(context.Context) (callResult, error) {
+			for {
+				chunk, recvErr := inputStream.Recv()
+				if errors.Is(recvErr, io.EOF) {
+					break
+				}
+				if recvErr != nil {
+					return callResult{input: marshalJSON(messages)}, recvErr
+				}
+				chunks = append(chunks, chunk)
+				if writer.Send(chunk, nil) {
+					return callResult{input: marshalJSON(messages)}, context.Canceled
+				}
+			}
+			merged, concatErr := schema.ConcatMessages(chunks)
+			if concatErr != nil {
+				return callResult{input: marshalJSON(messages)}, concatErr
+			}
+			return modelCallResult(messages, merged), nil
+		})
+		m.finish(context.WithoutCancel(ctx), reservationID, result, startedAt, callErr)
+		if callErr != nil {
+			writer.Send(nil, callErr)
+		}
+	}()
+	return output, nil
+}
+
+func (m *managedModel) reserve(ctx context.Context, messages []*schema.Message) (string, error) {
+	if m.gateway.quota == nil || m.invocation.WorkspaceID == "" || m.invocation.ModelProfileVersionID == "" {
+		return "", nil
+	}
+	estimatedInput := estimateMessageTokens(messages)
+	estimatedOutput := 1024
+	if limit := m.invocation.GenerationConfig.MaxOutputTokens; limit != nil && *limit > 0 {
+		estimatedOutput = *limit
+	}
+	env := m.invocation.Environment
+	if env == "" {
+		env = "dev"
+	}
+	return m.gateway.quota.ReserveProjectUsage(ctx, ProjectQuotaRequest{
+		WorkspaceID: m.invocation.WorkspaceID, Env: env,
+		ModelProfileVersionID: m.invocation.ModelProfileVersionID, DeploymentID: m.provider.deploymentID,
+		ReservedTokens: estimatedInput + estimatedOutput,
+		ReservedCost:   tokenCost(m.provider, estimatedInput, estimatedOutput, 0),
+	})
+}
+
+func (m *managedModel) finish(ctx context.Context, reservationID string, result callResult, startedAt time.Time, callErr error) {
+	actualCost := tokenCost(m.provider, result.inputTokens, result.outputTokens, result.cachedTokens)
+	if reservationID != "" {
+		if err := m.gateway.quota.FinalizeProjectUsage(
+			ctx, reservationID, result.inputTokens+result.outputTokens, actualCost, callErr == nil,
+		); err != nil {
+			log.Printf("finalize project model quota: reservation_id=%s error=%v", reservationID, err)
+		}
+	}
+	status := "ok"
+	if callErr != nil {
+		status = "error"
+	}
+	m.gateway.sink.Record(ctx, CallUsage{
+		Provider: m.provider.system, ProviderID: m.provider.providerID, DeploymentID: m.provider.deploymentID,
+		Model: m.provider.modelID, InputTokens: result.inputTokens, OutputTokens: result.outputTokens,
+		CachedTokens: result.cachedTokens, LatencyMs: int(time.Since(startedAt).Milliseconds()),
+		Status: status, Classification: m.classification, WorkspaceID: m.invocation.WorkspaceID,
+		AgentID: m.invocation.AgentID, UserID: m.invocation.UserID, PromptVersionID: m.invocation.PromptVersionID,
+		ModelProfileVersionID: m.invocation.ModelProfileVersionID, ExperimentID: m.invocation.ExperimentID,
+		ExperimentVariant: m.invocation.ExperimentVariant, Cost: actualCost,
+	})
+}
+
+func modelCallResult(messages []*schema.Message, response *schema.Message) callResult {
+	result := callResult{input: marshalJSON(messages), output: marshalJSON(response)}
+	if response == nil || response.ResponseMeta == nil {
+		return result
+	}
+	result.finishReason = response.ResponseMeta.FinishReason
+	if response.ResponseMeta.Usage != nil {
+		result.inputTokens = response.ResponseMeta.Usage.PromptTokens
+		result.outputTokens = response.ResponseMeta.Usage.CompletionTokens
+		result.cachedTokens = response.ResponseMeta.Usage.PromptTokenDetails.CachedTokens
+	}
+	return result
+}
+
+func marshalJSON(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
 }
 
 func estimateMessageTokens(messages []*schema.Message) int {

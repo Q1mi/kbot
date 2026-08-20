@@ -61,7 +61,7 @@ type Service struct {
 // 会被路由到 KB 检索执行器。
 const KBSearchSDKName = "search_knowledge_base"
 
-// pgvectorDim 是 kb_chunks.embedding vector(N) 的固定维度，见 migration 000005。
+// pgvectorDim 是 kb_chunks.embedding vector(N) 的维度,见 migrations 000005 与 ADR 0006。
 const pgvectorDim = 1536
 
 // rateLimitPerMin 是每个身份、每个 hook 的每分钟请求上限。
@@ -135,7 +135,7 @@ func NewServiceWithSandboxRunner(db *pgxpool.Pool, rds *redis.Client, jwtKey []b
 	var kbSearcher retriever.Searcher
 	if db != nil {
 		if embedCache.Dim() != pgvectorDim {
-			log.Fatalf("KBOT_EMBEDDER_DIM=%d 与 kb_chunks.embedding vector(%d) 不一致；修改维度需要新建表并重新写入全部 KB", embedCache.Dim(), pgvectorDim)
+			log.Fatalf("KBOT_EMBEDDER_DIM=%d 与 kb_chunks.embedding vector(%d) 不一致;改维度需新表 + 重灌全部 KB(见 ADR 0006)", embedCache.Dim(), pgvectorDim)
 		}
 		kbSearcher = retriever.NewPgvectorRetriever(db, embedCache)
 	} else {

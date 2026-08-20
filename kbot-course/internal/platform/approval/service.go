@@ -83,7 +83,7 @@ func NewPostgresService(pool *pgxpool.Pool) *Service {
 	return service
 }
 
-func (s *Service) Create(_ context.Context, request Request) (*Request, error) {
+func (s *Service) Create(ctx context.Context, request Request) (*Request, error) {
 	if request.WorkspaceID == "" || request.RunID == "" || request.ToolCallID == "" || request.ToolVersionID == "" {
 		return nil, fmt.Errorf("workspace, run and pinned tool call are required")
 	}
@@ -104,13 +104,34 @@ func (s *Service) Create(_ context.Context, request Request) (*Request, error) {
 	request.Checkpoint = append([]byte(nil), request.Checkpoint...)
 	request.argumentsHash = sha256.Sum256(canonical)
 	if s.pool != nil {
-		return s.createPostgres(context.Background(), request)
+		return s.createPostgres(ctx, request)
 	}
 	s.mu.Lock()
 	s.requests[request.ID] = request
 	s.mu.Unlock()
 	copy := cloneRequest(request)
 	return &copy, nil
+}
+
+func (s *Service) SaveCheckpoint(ctx context.Context, workspaceID, requestID string, checkpoint []byte) error {
+	if len(checkpoint) == 0 {
+		return fmt.Errorf("approval checkpoint is required")
+	}
+	if s.pool != nil {
+		return s.saveCheckpointPostgres(ctx, workspaceID, requestID, checkpoint)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request, ok := s.requests[requestID]
+	if !ok || request.WorkspaceID != workspaceID {
+		return fmt.Errorf("approval %s not found", requestID)
+	}
+	if request.Status != StatusPending {
+		return fmt.Errorf("approval checkpoint can only be saved while pending")
+	}
+	request.Checkpoint = append([]byte(nil), checkpoint...)
+	s.requests[requestID] = request
+	return nil
 }
 
 func (s *Service) Decide(ctx context.Context, workspaceID, requestID, actorID string, approved bool) error {

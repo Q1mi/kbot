@@ -195,8 +195,7 @@ func (e *Executor) Execute(ctx context.Context, call Call) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
-		transport := NewMCPHTTPTransport(e.client, endpoint.String()).WithHeaders(headers)
-		payload, err := NewMCPClient(transport).CallTool(ctx, toolName, toolArguments)
+		payload, err := callMCPTool(ctx, endpoint.String(), toolName, toolArguments, headers, e.client)
 		if err != nil {
 			return Result{}, err
 		}

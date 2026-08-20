@@ -44,21 +44,23 @@ func TestMCPHelperProcess(t *testing.T) {
 
 	for scanner.Scan() {
 		var req struct {
-			ID     int            `json:"id"`
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 			os.Exit(2)
 		}
 		switch req.Method {
 		case "initialize":
-			fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`+"\n", req.ID)
+			fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`+"\n", req.ID)
 		case "notifications/initialized":
 			// Notification 没有响应。
+		case "tools/list":
+			fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"echo text","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}}`+"\n", req.ID)
 		case "tools/call":
 			args, _ := req.Params["arguments"].(map[string]any)
-			fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"echo: %s"}],"isError":false}}`+"\n", req.ID, args["text"])
+			fmt.Fprintf(writer, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"echo: %s"}],"isError":false}}`+"\n", req.ID, args["text"])
 			_ = writer.Flush()
 			os.Exit(0)
 		}
@@ -78,16 +80,16 @@ func TestMCPStreamableHTTPExecutorJSON(t *testing.T) {
 			return
 		}
 		var req struct {
-			ID     int            `json:"id"`
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "initialize":
 			w.Header().Set("MCP-Session-Id", sessionID)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`, req.ID)
 		case "notifications/initialized":
 			if r.Header.Get("MCP-Session-Id") != sessionID || r.Header.Get("MCP-Protocol-Version") != "2025-11-25" {
 				http.Error(w, "missing session headers", http.StatusBadRequest)
@@ -95,6 +97,9 @@ func TestMCPStreamableHTTPExecutorJSON(t *testing.T) {
 			}
 			initialized = true
 			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"weather","description":"weather","inputSchema":{"type":"object","properties":{"city":{"type":"string"}}}}]}}`, req.ID)
 		case "tools/call":
 			called = true
 			if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
@@ -102,7 +107,7 @@ func TestMCPStreamableHTTPExecutorJSON(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"sunny"}],"structuredContent":{"temp":22},"isError":false}}`)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"sunny"}],"structuredContent":{"temp":22},"isError":false}}`, req.ID)
 		default:
 			http.Error(w, "unknown method", http.StatusBadRequest)
 		}
@@ -135,19 +140,23 @@ func TestMCPStreamableHTTPExecutorSSE(t *testing.T) {
 			return
 		}
 		var req struct {
-			Method string `json:"method"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {
 		case "initialize":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}`, req.ID)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"echo","inputSchema":{"type":"object"}}]}}`, req.ID)
 		case "tools/call":
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "event: message\n")
-			fmt.Fprint(w, `data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"from sse"}]}}`+"\n\n")
+			fmt.Fprintf(w, `data: {"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"from sse"}]}}`+"\n\n", req.ID)
 		}
 	}))
 	defer srv.Close()

@@ -1,7 +1,7 @@
 //go:build integration
 
 // 核心业务的真实 PostgreSQL/Redis 端到端测试。
-// 全部用 StartPostgres / StartRedis 起真依赖,用脚本化 Generator(scriptedGen,定义在 e2e_test.go)注入引擎,
+// 全部用 StartPostgres / StartRedis 起真依赖,用脚本化 ChatModel（scriptedChatModel,定义在 e2e_test.go)注入引擎,
 // 无需真实 LLM。断言只针对本测试创建的实体(unique workspace/agent/actor),不依赖全局计数 —— 与各 store
 // contract test 共用同一 testpg 时不互相干扰。
 package integration_test
@@ -79,7 +79,7 @@ func TestRefundAgentE2E_PG(t *testing.T) {
 	ws := newWorkspace(t, ctx, plat, "refund-ws")
 	agID := publishToolAgent(t, ctx, plat, ws, "refund_api", srv.URL, false)
 
-	eng := engine.NewEngineWithGenerator(plat.Agent, &scriptedGen{}, plat.Registry).
+	eng := engine.NewEngineWithChatModel(plat.Agent, &scriptedChatModel{}, plat.Registry).
 		WithGuard(plat.Guard).WithAudit(plat.Audit)
 
 	answer, err := eng.Chat(ctx, engine.ChatStreamRequest{AgentID: agID, Message: "帮我退款", UserID: "u1"})
@@ -107,7 +107,7 @@ func TestKBIngestE2E_PG(t *testing.T) {
 	}
 	dir := t.TempDir()
 	// 含 ASCII 词元 SKU-2024:pgvector 的 BM25 用 to_tsvector('simple',...),对中文不分词,
-	// 故让 query 与 doc 共享一个 ASCII 词元，确保 bm25 档也能命中。
+	// 故让 query 与 doc 共享一个 ASCII 词元,确保 bm25 档也能命中(中文分词见 ADR 0019)。
 	if err := os.WriteFile(filepath.Join(dir, "refund.md"), []byte("退款政策:用户在七天内可以申请退款,需提供订单号 SKU-2024。"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestKBIngestE2E_PG(t *testing.T) {
 	}
 	// 三档都应在真 pgvector 上命中。query 用纯 ASCII 词元 SKU-2024:
 	// plainto_tsquery 会把多词元用 AND 连接,而 'simple' 对中文不分词(整段 CJK 成一个词元),
-	// 故混入中文会因 AND 落空；使用 doc 中存在的 ASCII 词元可稳定命中。
+	// 故混入中文会因 AND 落空;用 doc 里存在的 ASCII 词元最稳(中文分词见 ADR 0019)。
 	for _, mode := range []string{"bm25", "vector", "hybrid"} {
 		ps, err := plat.KB.SearchMode(ctx, knb.ID, "SKU-2024", 3, mode)
 		if err != nil {
@@ -181,7 +181,7 @@ func TestGuardBlockE2E_PG(t *testing.T) {
 	}
 
 	const actor = "guard-victim-e2e" // 唯一 actor,便于隔离查询
-	eng := engine.NewEngineWithGenerator(plat.Agent, &scriptedGen{}, plat.Registry).
+	eng := engine.NewEngineWithChatModel(plat.Agent, &scriptedChatModel{}, plat.Registry).
 		WithGuard(plat.Guard).WithAudit(plat.Audit)
 
 	ch, err := eng.ChatStream(ctx, engine.ChatStreamRequest{
@@ -233,7 +233,7 @@ func TestApprovalResumeE2E_PG(t *testing.T) {
 	ws := newWorkspace(t, ctx, plat, "approval-ws")
 	agID := publishToolAgent(t, ctx, plat, ws, "refund_money", srv.URL, true) // sensitive
 
-	eng := engine.NewEngineWithGenerator(plat.Agent, &scriptedGen{}, plat.Registry).
+	eng := engine.NewEngineWithChatModel(plat.Agent, &scriptedChatModel{}, plat.Registry).
 		WithGuard(plat.Guard).WithAudit(plat.Audit).
 		WithApprovals(plat.ApprovalGate())
 

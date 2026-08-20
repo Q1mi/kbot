@@ -2,7 +2,7 @@
 //
 // 讲义 §15.9 用 ory/dockertest 起真 PG/Redis。本平台 M1–M5 的存储是进程内内存实现
 // （贯穿各 docs/mN.md 的统一脱节点），因此 e2e 直接跑在内存 platform 上，并用脚本化
-// Generator 注入引擎、无需真实 LLM。落 PostgreSQL 后把本测试切到 dockertest 即可。
+// ChatModel 注入引擎、无需真实 LLM。落 PostgreSQL 后把本测试切到 dockertest 即可。
 package integration_test
 
 import (
@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/Q1mi/kbot/internal/platform"
@@ -29,13 +30,14 @@ import (
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 )
 
-// scriptedGen：第一次（有工具时）调用工具，第二次给最终回答。
-type scriptedGen struct {
+// scriptedChatModel：第一次（有工具时）调用工具，第二次给最终回答。
+type scriptedChatModel struct {
 	mu    sync.Mutex
 	calls int
 }
 
-func (g *scriptedGen) Generate(_ context.Context, _ []*schema.Message, tools []*schema.ToolInfo) (*schema.Message, error) {
+func (g *scriptedChatModel) Generate(_ context.Context, _ []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	tools := model.GetCommonOptions(nil, opts...).Tools
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls++
@@ -46,6 +48,14 @@ func (g *scriptedGen) Generate(_ context.Context, _ []*schema.Message, tools []*
 		}}), nil
 	}
 	return schema.AssistantMessage("已根据工具结果完成处理", nil), nil
+}
+
+func (g *scriptedChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	response, err := g.Generate(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{response}), nil
 }
 
 func TestPlatformCRUDFlow(t *testing.T) {
@@ -143,8 +153,8 @@ func TestRuntimeToolCallE2E(t *testing.T) {
 		t.Fatalf("create agent: %v", err)
 	}
 
-	// 用脚本化生成器 + Guard + Audit 跑引擎。
-	eng := engine.NewEngineWithGenerator(plat.Agent, &scriptedGen{}, plat.Registry).
+	// 用脚本化 ChatModel + Guard + Audit 跑引擎。
+	eng := engine.NewEngineWithChatModel(plat.Agent, &scriptedChatModel{}, plat.Registry).
 		WithGuard(plat.Guard).
 		WithAudit(plat.Audit)
 

@@ -5,57 +5,51 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
-	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
 func TestToolPolicyEnforcesNetworkAndKnowledgeBaseScopes(t *testing.T) {
-	ls := &loopState{
+	state := &agentRunState{
 		policies: toolPolicies{
 			requiresNetwork: map[string]bool{"remote": true},
 			kbScoped:        map[string]bool{"search_kb": true},
 		},
 		agentKBs: map[string]bool{"kb-agent": true},
 	}
-	if err := ls.toolPolicyError("remote", `{}`); err == nil || !strings.Contains(err.Error(), "requires network") {
+	if err := state.toolPolicyError("remote", `{}`); err == nil || !strings.Contains(err.Error(), "requires network") {
 		t.Fatalf("expected network denial, got %v", err)
 	}
-	ls.allowNetwork = true
-	if err := ls.toolPolicyError("remote", `{}`); err != nil {
+	state.allowNetwork = true
+	if err := state.toolPolicyError("remote", `{}`); err != nil {
 		t.Fatalf("authorized network tool rejected: %v", err)
 	}
-	if err := ls.toolPolicyError("search_kb", `{"kb_id":"kb-other"}`); err == nil || !strings.Contains(err.Error(), "not attached") {
+	if err := state.toolPolicyError("search_kb", `{"kb_id":"kb-other"}`); err == nil || !strings.Contains(err.Error(), "not attached") {
 		t.Fatalf("expected agent KB denial, got %v", err)
 	}
-	if err := ls.toolPolicyError("search_kb", `{"kb_id":"kb-agent"}`); err != nil {
+	if err := state.toolPolicyError("search_kb", `{"kb_id":"kb-agent"}`); err != nil {
 		t.Fatalf("attached KB rejected: %v", err)
 	}
-	ls.activeSkill = &skillrunner.Spec{Name: "refund", AllowedKBs: []string{"kb-skill"}}
-	ls.activeKBs = map[string]bool{"kb-skill": true}
-	if err := ls.toolPolicyError("search_kb", `{"kb_id":"kb-agent"}`); err == nil || !strings.Contains(err.Error(), "active skill") {
+	state.skills = []skillrunner.Spec{{Name: "refund", AllowedTools: []string{"search_kb"}, AllowedKBs: []string{"kb-skill"}}}
+	state.activateSkill("refund")
+	if err := state.toolPolicyError("search_kb", `{"kb_id":"kb-agent"}`); err == nil || !strings.Contains(err.Error(), "active skill") {
 		t.Fatalf("expected skill KB denial, got %v", err)
 	}
 }
 
 func TestDisableModelInvocationRequiresExplicitUserTrigger(t *testing.T) {
-	e := &Engine{}
-	events := make(chan AgentEvent, 2)
-	ls := &loopState{
-		skills: []skillrunner.Spec{{
-			Name: "manual", Description: "manual", Body: "do it", DisableModelInvocation: true,
-		}},
+	specs := []skillrunner.Spec{{
+		Name: "manual", Description: "manual", Body: "do it", DisableModelInvocation: true,
+	}}
+	if _, ok := explicitSkillFromMessages([]*schema.Message{schema.UserMessage("普通请求")}, specs); ok {
+		t.Fatal("manual-only skill must stay hidden without an explicit user command")
 	}
-	em := emitter{ctx: context.Background(), ch: events}
-	if !e.activateSkill(context.Background(), ls, "manual", true, em) {
-		t.Fatal("model initiated denial should be handled")
-	}
-	if ls.activeSkill != nil {
-		t.Fatal("model must not activate a manual-only skill")
-	}
-	if !e.activateSkill(context.Background(), ls, "manual", false, em) || ls.activeSkill == nil {
-		t.Fatal("explicit user trigger should activate the skill")
+	name, ok := explicitSkillFromMessages([]*schema.Message{schema.UserMessage("/manual 处理任务")}, specs)
+	if !ok || name != "manual" {
+		t.Fatalf("explicit skill = %q, %v", name, ok)
 	}
 }
 
@@ -64,55 +58,40 @@ func TestRejectedParallelToolBatchCompletesEveryToolCall(t *testing.T) {
 		{ID: "call-invalid", Function: schema.FunctionCall{Name: "search_knowledge_base", Arguments: `{"kb_id":"guessed-kb"}`}},
 		{ID: "call-valid", Function: schema.FunctionCall{Name: "search_knowledge_base", Arguments: `{"kb_id":"kb-agent"}`}},
 	})
-	gen := &scriptedGen{replies: []*schema.Message{first, schema.AssistantMessage("已识别知识库参数错误", nil)}}
-	e := &Engine{gen: gen}
+	e := &Engine{}
 	policies := newToolPolicies()
 	policies.kbScoped["search_knowledge_base"] = true
-	ls := &loopState{
-		messages:   []*schema.Message{schema.UserMessage("查询规则")},
-		execByName: map[string]tooling.Executor{"search_knowledge_base": nil},
-		policies:   policies,
-		agentKBs:   map[string]bool{"kb-agent": true},
-		maxSteps:   2,
-	}
 	events := make(chan AgentEvent, 8)
-	answer, err := e.runLoop(context.Background(), ls, emitter{ctx: context.Background(), ch: events})
+	state := &agentRunState{
+		engine: e, policies: policies, agentKBs: map[string]bool{"kb-agent": true},
+		emitter: emitter{ctx: context.Background(), ch: events},
+	}
+	handler := &runtimePolicyHandler{state: state}
+	_, _, err := handler.AfterModelRewriteState(context.Background(), &adk.ChatModelAgentState{
+		Messages: []*schema.Message{first},
+	}, nil)
 	if err != nil {
-		t.Fatalf("run loop: %v", err)
+		t.Fatalf("classify batch: %v", err)
 	}
-	if answer != "已识别知识库参数错误" {
-		t.Fatalf("answer = %q", answer)
-	}
-	if len(gen.received) != 2 {
-		t.Fatalf("generate calls = %d, want 2", len(gen.received))
-	}
-	secondRequest := gen.received[1]
-	if err := validateToolCallResponses(secondRequest); err != nil {
-		t.Fatalf("second request violates tool call contract: %v", err)
-	}
-	if len(secondRequest) != 4 {
-		t.Fatalf("second request messages = %d, want 4", len(secondRequest))
-	}
-	if secondRequest[2].ToolCallID != "call-invalid" || !strings.Contains(secondRequest[2].Content, "not attached") {
-		t.Fatalf("invalid call response = %+v", secondRequest[2])
-	}
-	if secondRequest[3].ToolCallID != "call-valid" || !strings.Contains(secondRequest[3].Content, "batch rejected") {
-		t.Fatalf("valid call batch response = %+v", secondRequest[3])
-	}
-}
-
-func TestValidateToolCallResponsesRejectsIncompleteBatch(t *testing.T) {
-	assistant := schema.AssistantMessage("", []schema.ToolCall{
-		{ID: "call-1", Function: schema.FunctionCall{Name: "one"}},
-		{ID: "call-2", Function: schema.FunctionCall{Name: "two"}},
+	executed := 0
+	endpoint := e.runtimeToolMiddleware(state).Invokable(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		executed++
+		return &compose.ToolOutput{Result: "executed"}, nil
 	})
-	messages := []*schema.Message{assistant, schema.ToolMessage("ok", "call-1")}
-	if err := validateToolCallResponses(messages); err == nil || !strings.Contains(err.Error(), "call-2") {
-		t.Fatalf("expected missing call-2 error, got %v", err)
+	invalid, err := endpoint(context.Background(), &compose.ToolInput{
+		Name: "search_knowledge_base", CallID: "call-invalid", Arguments: `{"kb_id":"guessed-kb"}`,
+	})
+	if err != nil || !strings.Contains(invalid.Result, "not attached") {
+		t.Fatalf("invalid result=%+v err=%v", invalid, err)
 	}
-	messages = append(messages, schema.ToolMessage("ok", "call-2"))
-	if err := validateToolCallResponses(messages); err != nil {
-		t.Fatalf("complete tool batch rejected: %v", err)
+	valid, err := endpoint(context.Background(), &compose.ToolInput{
+		Name: "search_knowledge_base", CallID: "call-valid", Arguments: `{"kb_id":"kb-agent"}`,
+	})
+	if err != nil || !strings.Contains(valid.Result, "batch rejected") {
+		t.Fatalf("valid sibling result=%+v err=%v", valid, err)
+	}
+	if executed != 0 {
+		t.Fatalf("batch policy allowed %d side effects", executed)
 	}
 }
 

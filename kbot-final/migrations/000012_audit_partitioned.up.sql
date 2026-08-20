@@ -1,5 +1,5 @@
 -- 000012_audit_partitioned：审计日志月分区。
--- append-only；按月分区；默认留存 1 年，6 个月后迁移到 MinIO 冷存储。
+-- append-only;按月分区;默认留存 1 年(冷分区 6 个月迁 MinIO,见 ADR 0007)。
 -- default 分区承接超出预创建范围的数据；worker 负责创建新分区与归档旧分区。
 
 -- before_json/after_json/ip/ua 对齐 domain.AuditLog 的 *string(可空 TEXT;ip 用 TEXT 不用 INET 以兼容任意字符串)。

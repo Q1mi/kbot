@@ -1,6 +1,7 @@
 package skillrunner
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -12,39 +13,15 @@ func specs() []Spec {
 	}
 }
 
-func TestBuildL1(t *testing.T) {
-	l1 := BuildL1(specs())
-	if !strings.Contains(l1, "refund-flow：处理退款") {
-		t.Fatalf("L1 missing refund-flow: %s", l1)
+func TestBackendAdaptsPinnedSpecs(t *testing.T) {
+	backend := NewBackend(specs())
+	frontMatters, err := backend.List(context.Background())
+	if err != nil || len(frontMatters) != 2 || frontMatters[0].Name != "refund-flow" {
+		t.Fatalf("list: %+v err=%v", frontMatters, err)
 	}
-	if !strings.Contains(l1, "<USE_SKILL>") {
-		t.Fatalf("L1 missing USE_SKILL instruction: %s", l1)
-	}
-	if BuildL1(nil) != "" {
-		t.Fatal("expected empty L1 for no skills")
-	}
-}
-
-func TestBuildL1HidesManualOnlySkills(t *testing.T) {
-	l1 := BuildL1([]Spec{
-		{Name: "manual", Description: "仅手动", DisableModelInvocation: true},
-		{Name: "auto", Description: "可自动"},
-	})
-	if strings.Contains(l1, "manual") || !strings.Contains(l1, "auto") {
-		t.Fatalf("unexpected L1: %s", l1)
-	}
-	if got := BuildL1([]Spec{{Name: "manual", DisableModelInvocation: true}}); got != "" {
-		t.Fatalf("manual-only skills must not be disclosed, got %q", got)
-	}
-}
-
-func TestDetect(t *testing.T) {
-	name, ok := Detect("好的，我来处理。\n<USE_SKILL>refund-flow</USE_SKILL>")
-	if !ok || name != "refund-flow" {
-		t.Fatalf("detect failed: %q %v", name, ok)
-	}
-	if _, ok := Detect("普通回答，没有标记"); ok {
-		t.Fatal("should not detect")
+	loaded, err := backend.Get(context.Background(), "refund-flow")
+	if err != nil || loaded.Content != "退款流程正文" {
+		t.Fatalf("get: %+v err=%v", loaded, err)
 	}
 }
 

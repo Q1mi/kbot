@@ -21,6 +21,10 @@ git diff 09-start..09-end -- kbot-course
 
 | `kbot-course/` 教学终态 | `kbot-final/` 最终稳定版 |
 |---|---|
+| Eino v0.9.15 `ChatModelAgent + Runner + ToolsNode` 主循环 | 同一 ADK 主循环叠加版本快照、动态 Guard、审计、计量和模型故障转移 |
+| Eino ChatTemplate 与 Skill Middleware | Prompt 灰度、缓存失效、Skill 权限收窄和触发审计 |
+| StatefulInterrupt 与 ResumeWithParams | 精确 interrupt address、持久化 checkpoint、租约和单次副作用保证 |
+| Eino MCP Tool Adapter 与 AgentTool Supervisor | 固定 Tool/Agent 版本、网络策略、鉴权、审计和成本归因 |
 | 单组核心 migration，手写 PostgreSQL Store | 26 组 migration、sqlc 查询和 Memory/PostgreSQL contract test |
 | 进程内任务与审批恢复 | Redis、Asynq Worker、租约、fencing token、补偿扫描和有界重试 |
 | 教学版 BM25、向量和 RRF | PostgreSQL FTS、pgvector、异步 ingest、三档检索 Playground |
@@ -28,7 +32,6 @@ git diff 09-start..09-end -- kbot-course
 | Tool 版本和基础执行门禁 | 凭据 AES-GCM 加密、JSON Schema 校验、逐跳 SSRF 校验与结构化执行审计 |
 | 独立 Sandbox Runner | 镜像 digest、预拉取、孤儿清理、容量快速失败和完整 readiness |
 | Prompt 与 Model Profile 快照 | Provider/Deployment/Profile 主备路由、项目绑定、RPM/TPM/月预算结算 |
-| 审批 Checkpoint 与 A2UI | approval ID 唯一绑定、会话执行锁、失败恢复和单次副作用保证 |
 | 基础 OTel 与审计链 | Langfuse Trace 深链、分区审计、Tool/Skill/Sandbox 版本归因 |
 | 确定性 Eval 门禁 | 确定性、LLM light、LLM full Judge、历史运行和逐用例结果 |
 | 基础 Compose | 完整课堂、轻量开发、跨境和保险四套隔离环境 |

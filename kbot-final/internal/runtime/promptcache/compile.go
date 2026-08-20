@@ -7,14 +7,18 @@ import (
 	"text/template"
 	"time"
 	"unicode"
+
+	einoprompt "github.com/cloudwego/eino/components/prompt"
+	"github.com/cloudwego/eino/schema"
 )
 
 // Compile 把原始模板 + 变量 Schema 编译成 Compiled。
 //
-// 模板用标准库 text/template，带 missingkey=error(讲义 §14.4)。变量 Schema 解析出
-// required 键用于保存期与渲染期校验。Token 估算在保存时算一次并随版本持久化。
+// 模板语法与 Eino schema.GoTemplate 一致。保存时用 text/template 做一次纯语法校验，
+// 运行时交给 Eino ChatTemplate 完成格式化和 callback 分发。变量 Schema 解析出 required
+// 键用于保存期与渲染期校验，Token 估算随版本持久化。
 func Compile(versionID, raw, variablesSchemaJSON string) (*Compiled, error) {
-	tmpl, err := template.New("p").Option("missingkey=error").Parse(raw)
+	_, err := template.New("p").Option("missingkey=error").Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
@@ -27,7 +31,7 @@ func Compile(versionID, raw, variablesSchemaJSON string) (*Compiled, error) {
 	return &Compiled{
 		VersionID:    versionID,
 		Raw:          raw,
-		Tmpl:         tmpl,
+		Tmpl:         einoprompt.FromMessages(schema.GoTemplate, schema.UserMessage(raw)),
 		RequiredVars: required,
 		EstTokens:    EstimateTokens(raw),
 		UpdatedAt:    time.Now(),

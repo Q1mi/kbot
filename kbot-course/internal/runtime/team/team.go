@@ -1,4 +1,7 @@
-// Package team implements deterministic Supervisor and Pipeline orchestration.
+// Package team 通过固定 Agent 版本组织多 Agent 协作。
+//
+// Pipeline 需要严格的执行顺序，因此在本包保留确定性流程；Supervisor 由
+// runtime/engine 使用 Eino ADK ChatModelAgent + AgentTool 装配。
 package team
 
 import (
@@ -29,7 +32,6 @@ type Step struct {
 }
 
 type MemberRunner func(context.Context, Member, string) (string, error)
-type Router func(supervisorOutput string) (nextRole, finalAnswer string, done bool)
 
 func RunPipeline(ctx context.Context, members []Member, input string, run MemberRunner) (string, []Step, error) {
 	if len(members) == 0 || run == nil {
@@ -48,55 +50,7 @@ func RunPipeline(ctx context.Context, members []Member, input string, run Member
 	return current, steps, nil
 }
 
-func RunSupervisor(ctx context.Context, supervisor Member, workers []Member, input string, run MemberRunner, route Router, maxSteps int) (string, []Step, error) {
-	if len(workers) == 0 || run == nil || route == nil {
-		return "", nil, fmt.Errorf("supervisor, workers, runner and router are required")
-	}
-	if maxSteps <= 0 {
-		maxSteps = 8
-	}
-	byRole := make(map[string]Member, len(workers))
-	for _, worker := range workers {
-		byRole[worker.Role] = worker
-	}
-	steps := make([]Step, 0, maxSteps)
-	supervisorInput := input
-	for range maxSteps {
-		output, err := run(ctx, supervisor, supervisorInput)
-		if err != nil {
-			return "", steps, fmt.Errorf("supervisor: %w", err)
-		}
-		steps = append(steps, Step{Role: supervisor.Role, AgentID: supervisor.AgentID, Input: supervisorInput, Output: output})
-		nextRole, final, done := route(output)
-		if done {
-			return final, steps, nil
-		}
-		worker, exists := byRole[nextRole]
-		if !exists {
-			return "", steps, fmt.Errorf("supervisor routed to unknown role %q", nextRole)
-		}
-		workerOutput, err := run(ctx, worker, input)
-		if err != nil {
-			return "", steps, fmt.Errorf("worker %s: %w", worker.Role, err)
-		}
-		steps = append(steps, Step{Role: worker.Role, AgentID: worker.AgentID, Input: input, Output: workerOutput})
-		supervisorInput = "worker[" + worker.Role + "] returned: " + workerOutput
-	}
-	return "", steps, fmt.Errorf("supervisor reached max steps %d", maxSteps)
-}
-
-func RouteDirective(output string) (string, string, bool) {
-	output = strings.TrimSpace(output)
-	if strings.HasPrefix(output, "ROUTE:") {
-		return strings.TrimSpace(strings.TrimPrefix(output, "ROUTE:")), "", false
-	}
-	if strings.HasPrefix(output, "DONE:") {
-		return "", strings.TrimSpace(strings.TrimPrefix(output, "DONE:")), true
-	}
-	return "", output, true
-}
-
-// Coordinator keeps the focused dispatch API introduced in the lesson start.
+// Coordinator 保留本课 start 引入的定向分发接口，适合调试单个固定版本成员。
 type Worker interface {
 	Run(context.Context, string, string) (string, error)
 }

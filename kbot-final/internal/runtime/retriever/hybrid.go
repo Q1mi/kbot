@@ -7,6 +7,10 @@ import (
 	"math"
 	"sort"
 	"sync"
+
+	einoretriever "github.com/cloudwego/eino/components/retriever"
+	"github.com/cloudwego/eino/flow/retriever/router"
+	"github.com/cloudwego/eino/schema"
 )
 
 // Passage 是一条检索回的片段，带来源 doc_id 与分数，便于回答时标注引用。
@@ -137,15 +141,54 @@ func (r *Retriever) Search(ctx context.Context, kbID, query string, k int) ([]Pa
 	}
 
 	cand := k * 2 // 两路各取 k*2 候选。
-	vecRanked := vectorRank(qv, idx, cand)
-	bm25Ranked := bm25Search(idx, query, cand)
-
-	merged := rrf(vecRanked, bm25Ranked, 60)
-	if len(merged) > cand {
-		merged = merged[:cand]
+	hybrid, err := router.NewRetriever(ctx, &router.Config{
+		Retrievers: map[string]einoretriever.Retriever{
+			"vector": &rankedRetriever{rank: func(_ string, topK int) []Passage { return vectorRank(qv, idx, topK) }},
+			"bm25":   &rankedRetriever{rank: func(q string, topK int) []Passage { return bm25Search(idx, q, topK) }},
+		},
+		Router: func(context.Context, string) ([]string, error) {
+			return []string{"vector", "bm25"}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	documents, err := hybrid.Retrieve(ctx, query, einoretriever.WithTopK(cand))
+	if err != nil {
+		return nil, err
+	}
+	merged := make([]Passage, 0, len(documents))
+	for _, document := range documents {
+		docID, _ := document.MetaData["doc_id"].(string)
+		merged = append(merged, Passage{DocID: docID, ChunkID: document.ID, Text: document.Content})
+		if len(merged) == cand {
+			break
+		}
 	}
 
 	return r.rerank(query, merged, k), nil
+}
+
+type rankedRetriever struct {
+	rank func(query string, topK int) []Passage
+}
+
+func (r *rankedRetriever) Retrieve(
+	_ context.Context, query string, opts ...einoretriever.Option,
+) ([]*schema.Document, error) {
+	topK := 10
+	if configured := einoretriever.GetCommonOptions(nil, opts...).TopK; configured != nil && *configured > 0 {
+		topK = *configured
+	}
+	passages := r.rank(query, topK)
+	documents := make([]*schema.Document, 0, len(passages))
+	for _, passage := range passages {
+		documents = append(documents, &schema.Document{
+			ID: passage.ChunkID, Content: passage.Text,
+			MetaData: map[string]any{"doc_id": passage.DocID, "score": passage.Score},
+		})
+	}
+	return documents, nil
 }
 
 // vectorRank 用余弦相似度对所有 chunk 排序，返回前 n 个。
@@ -161,30 +204,6 @@ func vectorRank(qv []float32, idx *kbIndex, n int) []Passage {
 		scored = scored[:n]
 	}
 	return scored
-}
-
-// rrf 用 Reciprocal Rank Fusion 合并两路结果。常数 k 取经验值 60。
-func rrf(a, b []Passage, k int) []Passage {
-	score := map[string]float64{}
-	keep := map[string]Passage{}
-	accumulate := func(list []Passage) {
-		for rank, p := range list {
-			score[p.ChunkID] += 1.0 / float64(k+rank+1)
-			if _, ok := keep[p.ChunkID]; !ok {
-				keep[p.ChunkID] = p
-			}
-		}
-	}
-	accumulate(a)
-	accumulate(b)
-
-	out := make([]Passage, 0, len(keep))
-	for id, p := range keep {
-		p.Score = score[id]
-		out = append(out, p)
-	}
-	sortByScoreDesc(out)
-	return out
 }
 
 // rerank 使用词重叠相关度作为轻量收尾信号。

@@ -11,7 +11,7 @@
 | 保险理赔与反欺诈平台 | 理赔审核 | `理赔审核 · System Prompt` | `理赔审核 · User Prompt Template` | `理赔审核 Profile v1` |
 | 保险理赔与反欺诈平台 | 反欺诈分析 | `反欺诈分析 · System Prompt` | `反欺诈分析 · User Prompt Template` | `反欺诈分析 Profile v1` |
 
-System Prompt 版本包含场景化生成参数，并在创建时指向对应的 Model Profile Version。User Prompt Template 绑定到 Agent 版本，用于把 Playground 首轮业务表单渲染成标准 `user` 消息。模板仍可在 Prompt Center 中独立调试，便于学员观察 `text/template` 变量、JSON Schema 必填校验和 `missingkey=error` 行为。
+System Prompt 版本包含场景化生成参数，并在创建时指向对应的 Model Profile Version。User Prompt Template 绑定到 Agent 版本，用于把 Playground 首轮业务表单渲染成标准 `user` 消息。模板仍可在 Prompt Center 中独立调试，便于学员观察 Eino `schema.GoTemplate` 变量、JSON Schema 必填校验和 `missingkey=error` 行为。
 
 ## 设计边界
 

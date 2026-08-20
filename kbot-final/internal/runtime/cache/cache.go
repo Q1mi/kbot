@@ -1,7 +1,7 @@
 // Package cache 提供 Runtime 的缓存与幂等设施（设计文档 §4.8 / 讲义 §15.5）。
 //
-// 两类缓存职责独立：Prompt Cache 在 LLM Gateway 出口为稳定前缀透传 cache_control；
-// 这里实现 Embedding Cache（省重复 embedding 成本）与
+// Prompt 中心的本地编译缓存由 promptcache 包负责；这里实现 Embedding Cache
+// （省重复 embedding 成本）与
 // 幂等键存储（HTTP 重复请求去重）。
 package cache
 

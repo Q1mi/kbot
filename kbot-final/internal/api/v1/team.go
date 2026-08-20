@@ -3,7 +3,6 @@ package v1
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/Q1mi/kbot/internal/api/middleware"
 	"github.com/Q1mi/kbot/internal/domain"
@@ -212,7 +211,23 @@ func (h *TeamHandler) runTeam(
 		if len(members) < 2 {
 			return "", nil, errSupervisorMembers
 		}
-		return team.RunSupervisor(ctx, members[0], members[1:], input, run, supervisorRouter, 8)
+		supervisor := engine.TeamMember{
+			AgentID: members[0].AgentID, AgentVersionID: members[0].AgentVersionID, Role: members[0].Role,
+		}
+		workers := make([]engine.TeamMember, 0, len(members)-1)
+		for _, member := range members[1:] {
+			workers = append(workers, engine.TeamMember{
+				AgentID: member.AgentID, AgentVersionID: member.AgentVersionID, Role: member.Role,
+			})
+		}
+		final, runtimeSteps, err := h.runtime.RunSupervisorTeam(
+			ctx, supervisor, workers, input, workspaceID, userID,
+		)
+		steps := make([]team.Step, len(runtimeSteps))
+		for i, step := range runtimeSteps {
+			steps[i] = team.Step{Role: step.Role, AgentID: step.AgentID, Input: step.Input, Output: step.Output}
+		}
+		return final, steps, err
 	default:
 		return "", nil, errUnknownMode
 	}
@@ -234,16 +249,3 @@ var (
 type teamError struct{ msg string }
 
 func (e *teamError) Error() string { return e.msg }
-
-// supervisorRouter 解析主管输出的 ROUTE/DONE 路由约定。
-func supervisorRouter(out string) (nextRole, finalAnswer string, done bool) {
-	out = strings.TrimSpace(out)
-	if strings.HasPrefix(out, "DONE:") {
-		return "", strings.TrimSpace(strings.TrimPrefix(out, "DONE:")), true
-	}
-	if strings.HasPrefix(out, "ROUTE:") {
-		return strings.TrimSpace(strings.TrimPrefix(out, "ROUTE:")), "", false
-	}
-	// 主管没按约定输出：直接当最终回答返回（兜底）。
-	return "", out, true
-}

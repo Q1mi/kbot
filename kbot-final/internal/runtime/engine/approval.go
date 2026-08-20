@@ -2,36 +2,27 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/cloudwego/eino/schema"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/Q1mi/kbot/internal/a2ui"
 	"github.com/Q1mi/kbot/internal/domain"
 	kotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
-	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
 	"github.com/Q1mi/kbot/internal/util"
 )
 
 // EventAwaitApproval 在敏感工具被拦下等审批时发给客户端,带 approval_id。
 const EventAwaitApproval = "await_approval"
 
-// errAwaitApproval 是 runLoop 内部的"暂停"哨兵:已写 pending approval + checkpoint,等人审批。
+// errAwaitApproval 是 Resume 控制流的暂停哨兵：Eino 已生成新 checkpoint，等待下一项审批。
 var errAwaitApproval = errors.New("await approval")
 
 // ErrApprovalUnavailable 表示敏感工具缺少可用的审批持久化能力。
 var ErrApprovalUnavailable = errors.New("sensitive tool requires approval gate")
-
-type approvalCheckpoint struct {
-	Messages        []*schema.Message `json:"messages"`
-	ActiveSkillName string            `json:"active_skill_name,omitempty"`
-}
 
 // ApprovalGate 是 engine 用来"暂停-续跑"的最小持久化接口(approval.Store 适配后满足)。
 type ApprovalGate interface {
@@ -47,58 +38,8 @@ type ApprovalGate interface {
 // WithApprovals 挂上审批门。敏感工具缺少审批门时会安全失败。
 func (e *Engine) WithApprovals(g ApprovalGate) *Engine { e.approvals = g; return e }
 
-// pauseIfSensitive 在本批包含敏感工具时写入 pending approval 与 checkpoint，随后通知客户端暂停。
-func (e *Engine) pauseIfSensitive(ctx context.Context, ls *loopState, resp *schema.Message, em emitter) (bool, error) {
-	for _, tc := range resp.ToolCalls {
-		if !ls.policies.sensitive[tc.Function.Name] {
-			continue
-		}
-		if e.approvals == nil {
-			return false, ErrApprovalUnavailable
-		}
-		apprID := util.GenerateID()
-		approvalCtx, approvalSpan := startOperationSpan(ctx, "approval.pause",
-			attribute.String("approval.id", apprID),
-			attribute.String("gen_ai.tool.name", tc.Function.Name),
-			attribute.String("approval.status", "pending"),
-		)
-		if e.traceOptions.CaptureContent {
-			approvalSpan.SetAttributes(attribute.String("langfuse.observation.input", tc.Function.Arguments))
-		}
-		if err := e.approvals.CreatePending(approvalCtx, apprID, ls.workspaceID, ls.convID, tc.Function.Name, tc.Function.Arguments); err != nil {
-			finishOperationSpan(approvalCtx, approvalSpan, "failed", err)
-			return false, fmt.Errorf("create pending approval: %w", err)
-		}
-		// checkpoint 当前 messages(已含本轮 assistant 的 tool-call 决策),续跑时不重新生成。
-		checkpoint := approvalCheckpoint{Messages: ls.messages}
-		if ls.activeSkill != nil {
-			checkpoint.ActiveSkillName = ls.activeSkill.Name
-		}
-		state, err := json.Marshal(checkpoint)
-		if err != nil {
-			finishOperationSpan(approvalCtx, approvalSpan, "failed", err)
-			return false, fmt.Errorf("marshal approval checkpoint: %w", err)
-		}
-		if err := e.approvals.SaveCheckpoint(approvalCtx, apprID, ls.convID, state); err != nil {
-			finishOperationSpan(approvalCtx, approvalSpan, "failed", err)
-			return false, fmt.Errorf("save approval checkpoint: %w", err)
-		}
-		finishOperationSpan(approvalCtx, approvalSpan, "pending", nil)
-		// pending + checkpoint 已落库,即便客户端已断开也照常暂停;send 失败无所谓。
-		em.send(AgentEvent{Type: EventAwaitApproval, Text: apprID, Data: tc.Function.Name})
-		if messages, err := a2ui.ApprovalSurfaceWithPresentation(
-			apprID, ls.convID, tc.Function.Name, tc.Function.Arguments,
-			ls.policies.approvalUI[tc.Function.Name],
-		); err == nil {
-			e.emitA2UI(em, messages)
-		}
-		return true, nil
-	}
-	return false, nil
-}
-
 // Resume 从 checkpoint 续跑一个等审批的会话(worker 在审批通过后调用)。
-// 载回 messages 快照 → 重建工具 → 执行那批被批准的工具 → 续跑 runLoop(LLM 不重新生成 tool-call 决策)。
+// Eino Runner 载回完整框架 checkpoint，并只恢复审批记录对应的工具调用。
 func (e *Engine) Resume(ctx context.Context, conversationID, approvalID string) (result string, retErr error) {
 	ctx, resumeSpan := startOperationSpan(ctx, "approval.resume",
 		attribute.String("conversation.id", conversationID),
@@ -162,16 +103,9 @@ func (e *Engine) Resume(ctx context.Context, conversationID, approvalID string) 
 	if err != nil {
 		return "", fmt.Errorf("load checkpoint: %w", err)
 	}
-	var checkpoint approvalCheckpoint
-	if err := json.Unmarshal(state, &checkpoint); err != nil || len(checkpoint.Messages) == 0 {
-		// 兼容 migration 14 之前只保存 messages 数组的 checkpoint。
-		if legacyErr := json.Unmarshal(state, &checkpoint.Messages); legacyErr != nil {
-			return "", fmt.Errorf("unmarshal checkpoint: %w", legacyErr)
-		}
-	}
-	messages := checkpoint.Messages
-	if len(messages) == 0 {
-		return "", fmt.Errorf("checkpoint 为空")
+	frameworkCheckpoint, interruptID, err := decodeFrameworkCheckpoint(state)
+	if err != nil {
+		return "", err
 	}
 
 	conv, err := e.platform.LoadConversation(ctx, conversationID)
@@ -206,25 +140,12 @@ func (e *Engine) Resume(ctx context.Context, conversationID, approvalID string) 
 		GenerationConfig:      snapshot.GenerationConfig, ExperimentID: snapshot.ExperimentID,
 		ExperimentVariant: snapshot.ExperimentVariant,
 	})
-	allInfos, execByName, policies, err := e.buildTools(ctx, snapshot.ToolVersionIDs, snapshot.KBIDs)
+	_, _, policies, err := e.buildTools(ctx, snapshot.ToolVersionIDs, snapshot.KBIDs)
 	if err != nil {
 		return "", fmt.Errorf("build tools: %w", err)
 	}
-	ls := &loopState{
-		convID: conversationID, workspaceID: conv.WorkspaceID, messages: messages, allInfos: allInfos, execByName: execByName,
-		policies: policies, skills: snapshot.Skills, agentKBs: stringSet(snapshot.KBIDs),
-		allowNetwork: snapshot.AllowNetwork, maxSteps: maxStepsOf(snapshot),
-	}
-	if checkpoint.ActiveSkillName != "" {
-		if spec, ok := skillrunner.Find(snapshot.Skills, checkpoint.ActiveSkillName); ok {
-			ls.activeSkill = &spec
-			ls.activeInfos = filterInfos(allInfos, spec.AllowedTools)
-			ls.activeKBs = stringSet(spec.AllowedKBs)
-		}
-	}
 
-	// 事件 drain(Resume 非流式,只取最终文本)。drain goroutine 一直读到 close,
-	// 故这里的 send 不会阻塞;emitter 仍带 ctx,取消时也能让 runLoop/executeToolBatch 提前收尾。
+	// Resume 由审批 worker 触发，事件只用于维持与在线运行一致的审计路径。
 	eventCh := make(chan AgentEvent, 16)
 	done := make(chan struct{})
 	go func() {
@@ -233,35 +154,24 @@ func (e *Engine) Resume(ctx context.Context, conversationID, approvalID string) 
 		close(done)
 	}()
 	em := emitter{ctx: ctx, ch: eventCh}
-
-	// 执行被批准的那批工具(checkpoint 最后一条 assistant 的 tool_calls),不再暂停。
-	last := messages[len(messages)-1]
-	if len(last.ToolCalls) > 0 {
-		if e.rejectUnauthorizedToolCalls(ls, last, em) {
-			close(eventCh)
-			<-done
-			return "", fmt.Errorf("approved tool call no longer satisfies agent policy")
-		}
-		if err := e.executeToolBatch(ctx, ls, last, em); err != nil {
-			close(eventCh)
-			<-done
-			return "", err
-		}
-	}
-
-	answer, runErr := e.runLoop(ctx, ls, em)
+	answer, interrupts, nextCheckpoint, runErr := e.resumeWithADK(
+		ctx, snapshot, policies, conversationID, conv.WorkspaceID,
+		approvalID, interruptID, frameworkCheckpoint, em,
+	)
 	close(eventCh)
 	<-done
-	if errors.Is(runErr, errAwaitApproval) {
-		// 续跑里又撞上敏感工具:再次暂停(已写新的 pending+checkpoint)。
+	if runErr != nil {
+		return "", runErr
+	}
+	if len(interrupts) > 0 {
+		if err := persistApprovalInterrupts(ctx, e.approvals, conversationID, nextCheckpoint, interrupts); err != nil {
+			return "", err
+		}
 		if err := e.commitConversationTurn(ctx, turns, conversationID, turnToken, nil, "awaiting_approval"); err != nil {
 			return "", fmt.Errorf("save awaiting approval state: %w", err)
 		}
 		turnFinalized = true
 		return "", errAwaitApproval
-	}
-	if runErr != nil {
-		return "", runErr
 	}
 
 	if e.guard != nil {
