@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
 // Platform 是 Runtime 读取控制面数据所需的最小接口。
@@ -20,22 +21,34 @@ type Platform interface {
 // AgentSnapshot 是 Runtime 已解析好的固定配置。
 // 后续课程会逐步加入 Model、Prompt、Tool、Skill 和知识库版本。
 type AgentSnapshot struct {
-	ID           string
-	AgentID      string
-	WorkspaceID  string
-	SystemPrompt string
-	MaxSteps     int
+	ID             string
+	AgentID        string
+	WorkspaceID    string
+	SystemPrompt   string
+	MaxSteps       int
+	ToolVersionIDs []string
 }
 
 // Engine 只依赖稳定接口，不直接依赖控制面的具体存储实现。
 type Engine struct {
 	platform Platform
 	model    model.BaseChatModel
+	tools    ToolRuntime
+}
+
+type ToolRuntime interface {
+	Bind(ctx context.Context, workspaceID string, versionIDs []string) ([]tooling.Binding, error)
+	Execute(ctx context.Context, call tooling.Call) (tooling.Result, error)
 }
 
 // New 创建 Agent Runtime。
 func New(platform Platform, chatModel model.BaseChatModel) *Engine {
 	return &Engine{platform: platform, model: chatModel}
+}
+
+func (e *Engine) WithTools(tools ToolRuntime) *Engine {
+	e.tools = tools
+	return e
 }
 
 // ResolveSnapshot 按会话固定的 AgentVersion 解析运行快照。
@@ -66,6 +79,9 @@ func (e *Engine) ResolveSnapshot(
 			conversation.AgentVersionID,
 			snapshot.ID,
 		)
+	}
+	if conversation.WorkspaceID != "" && snapshot.WorkspaceID != "" && conversation.WorkspaceID != snapshot.WorkspaceID {
+		return nil, fmt.Errorf("conversation and agent snapshot belong to different workspaces")
 	}
 	return snapshot, nil
 }

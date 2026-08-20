@@ -17,6 +17,8 @@ import (
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
 	"github.com/Q1mi/kbot/internal/runtime/engine"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
+	"github.com/Q1mi/kbot/internal/runtime/sandbox"
+	"github.com/Q1mi/kbot/internal/runtime/tooling"
 )
 
 func main() {
@@ -34,6 +36,12 @@ func main() {
 	controlPlane.PutConversation(&domain.Conversation{ID: "demo-conversation", AgentID: "demo", AgentVersionID: "demo-v1"})
 	runtime := engine.New(controlPlane, gateway)
 	toolRegistry := platformtool.NewRegistry()
+	sandboxClient, err := sandbox.NewClient(cfg.SandboxRunnerURL, cfg.SandboxRunnerToken)
+	if err != nil {
+		log.Fatalf("create sandbox runner client: %v", err)
+	}
+	toolExecutor := tooling.NewExecutor(toolRegistry, nil, "crossborder-sim", "localhost", "127.0.0.1").WithSandbox(sandboxClient)
+	runtime.WithTools(toolExecutor)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

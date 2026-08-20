@@ -43,6 +43,7 @@ type AgentVersion struct {
 // 后续发布新版本不会改变已经创建的会话。
 type Conversation struct {
 	ID             string
+	WorkspaceID    string
 	AgentID        string
 	AgentVersionID string
 	UserID         string

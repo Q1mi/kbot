@@ -15,6 +15,17 @@ export KBOT_LLM_MODEL="doubao-seed-2-0-lite-260215"
 
 `KBOT_LLM_BASE_URL` 默认使用 `https://ark.cn-beijing.volces.com/api/v3`。密钥只通过环境变量注入。
 
+从第 08 课开始，代码执行由独立 Sandbox Runner 承担。先设置内部 Token，
+再启动 Runner；API 和 Runner 必须使用同一个值：
+
+```bash
+export KBOT_SANDBOX_RUNNER_TOKEN="replace-with-at-least-32-characters"
+make sandbox-runner-run
+```
+
+Runner 需要本机 Docker daemon，并会为每次 Python/Bash 调用创建一个禁网、
+只读、非 root、资源受限的一次性容器。
+
 本仓库保存《Go 企业级 AI Agent 平台实战》的逐课代码。
 
 课程从最小 HTTP 服务开始，每一课使用两个标签：

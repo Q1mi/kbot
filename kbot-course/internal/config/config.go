@@ -53,6 +53,12 @@ func (c Config) Validate() error {
 	if c.LLMTimeout <= 0 {
 		return fmt.Errorf("LLM timeout must be positive")
 	}
+	if strings.TrimSpace(c.SandboxRunnerURL) == "" {
+		return fmt.Errorf("KBOT_SANDBOX_RUNNER_URL is required")
+	}
+	if len(c.SandboxRunnerToken) < 32 {
+		return fmt.Errorf("KBOT_SANDBOX_RUNNER_TOKEN must contain at least 32 characters")
+	}
 	return nil
 }
 

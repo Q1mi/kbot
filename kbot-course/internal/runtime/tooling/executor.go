@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
+	jsonschema "github.com/eino-contrib/jsonschema"
 	"github.com/xeipuuv/gojsonschema"
 
 	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
@@ -40,6 +42,12 @@ type Result struct {
 // 第 08 课结束时会由独立 HTTP Client 实现。
 type SandboxRunner interface {
 	Run(ctx context.Context, language, code string) (string, error)
+}
+
+type Binding struct {
+	Name      string
+	VersionID string
+	Info      *schema.ToolInfo
 }
 
 type Executor struct {
@@ -205,6 +213,25 @@ func (e *Executor) secureTransport(transport *http.Transport) *http.Transport {
 		return nil, fmt.Errorf("dial tool host %q: %w", host, dialErr)
 	}
 	return transport
+}
+
+func (e *Executor) Bind(ctx context.Context, workspaceID string, versionIDs []string) ([]Binding, error) {
+	bindings := make([]Binding, 0, len(versionIDs))
+	for _, versionID := range versionIDs {
+		version, err := e.registry.Resolve(ctx, workspaceID, versionID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve tool binding %s: %w", versionID, err)
+		}
+		params := &jsonschema.Schema{}
+		if err := json.Unmarshal(version.InputSchema, params); err != nil {
+			return nil, fmt.Errorf("decode schema for tool %s: %w", version.Name, err)
+		}
+		bindings = append(bindings, Binding{
+			Name: version.Name, VersionID: version.ID,
+			Info: &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
+		})
+	}
+	return bindings, nil
 }
 
 func (e *Executor) validateEndpoint(endpoint *url.URL) error {

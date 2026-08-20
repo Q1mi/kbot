@@ -3,10 +3,14 @@ package engine
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/Q1mi/kbot/internal/domain"
+	platformtool "github.com/Q1mi/kbot/internal/platform/tool"
+	"github.com/Q1mi/kbot/internal/runtime/tooling"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
@@ -35,6 +39,47 @@ func (g replyChatModel) Stream(ctx context.Context, messages []*schema.Message, 
 		schema.AssistantMessage(string(runes[:middle]), nil),
 		schema.AssistantMessage(string(runes[middle:]), nil),
 	}), nil
+}
+
+func TestChatStreamRunsPinnedRESTToolEndToEnd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Idempotency-Key") != "react:call-1" {
+			t.Errorf("idempotency key = %q", r.Header.Get("Idempotency-Key"))
+		}
+		_, _ = w.Write([]byte(`{"status":"submitted"}`))
+	}))
+	defer server.Close()
+	registry := platformtool.NewRegistry()
+	if err := registry.Register(t.Context(), platformtool.Version{
+		ID: "refund-v1", WorkspaceID: "ws-1", Name: "refund", Description: "submit refund",
+		Endpoint: server.URL, Published: true,
+		InputSchema: []byte(`{"type":"object","properties":{"order_id":{"type":"string"}},"required":["order_id"],"additionalProperties":false}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controlPlane := &fakePlatform{
+		conversation: &domain.Conversation{ID: "c1", WorkspaceID: "ws-1", AgentVersionID: "v1"},
+		snapshots: map[string]*AgentSnapshot{"v1": {
+			ID: "v1", WorkspaceID: "ws-1", SystemPrompt: "help", MaxSteps: 4,
+			ToolVersionIDs: []string{"refund-v1"},
+		}},
+	}
+	chatModel := &sequenceChatModel{}
+	runtime := New(controlPlane, chatModel).WithTools(tooling.NewExecutor(registry, server.Client(), "127.0.0.1"))
+	var events []string
+	err := runtime.ChatStream(t.Context(), ChatRequest{ConversationID: "c1", WorkspaceID: "ws-1", Message: "退款"}, func(event Event) error {
+		events = append(events, event.Type)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("chat stream: %v", err)
+	}
+	if !chatModel.sawToolResult {
+		t.Fatal("model did not receive the REST tool result")
+	}
+	if got := strings.Join(events, ","); !strings.Contains(got, "tool_started,tool_finished") || !strings.Contains(got, "answer_done") {
+		t.Fatalf("events = %v", events)
+	}
 }
 
 func TestChatStreamEmitsIncrementalAnswerDeltas(t *testing.T) {
