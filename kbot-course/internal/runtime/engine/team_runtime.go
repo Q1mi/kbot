@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -13,8 +14,17 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/Q1mi/kbot/internal/domain"
+	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
+	"github.com/Q1mi/kbot/internal/platform/audit"
 	runtimeteam "github.com/Q1mi/kbot/internal/runtime/team"
 )
+
+type teamConversationCreator interface {
+	CreateConversationForVersion(
+		context.Context, string, string, string, string,
+	) (*domain.Conversation, error)
+}
 
 // RunSupervisorTeam 使用 Eino ChatModelAgent + AgentTool 运行主管团队。
 // 每个成员继续由 Kbot 标准运行时执行，从而沿用固定版本、工具审批、Guard 与审计能力。
@@ -23,8 +33,10 @@ func (e *Engine) RunSupervisorTeam(
 	supervisor runtimeteam.Member,
 	workers []runtimeteam.Member,
 	input string,
+	workspaceID string,
+	userID string,
 	run runtimeteam.MemberRunner,
-) (string, []runtimeteam.Step, error) {
+) (result string, steps []runtimeteam.Step, runErr error) {
 	if strings.TrimSpace(supervisor.AgentVersionID) == "" {
 		return "", nil, fmt.Errorf("supervisor agent version is required")
 	}
@@ -35,6 +47,37 @@ func (e *Engine) RunSupervisorTeam(
 	if err != nil {
 		return "", nil, fmt.Errorf("get supervisor snapshot: %w", err)
 	}
+	if workspaceID == "" {
+		workspaceID = snapshot.WorkspaceID
+	}
+	if snapshot.WorkspaceID != "" && snapshot.WorkspaceID != workspaceID {
+		return "", nil, fmt.Errorf("supervisor agent is outside the active workspace")
+	}
+	creator, ok := e.platform.(teamConversationCreator)
+	if !ok {
+		return "", nil, fmt.Errorf("supervisor conversation persistence is required")
+	}
+	conversation, err := creator.CreateConversationForVersion(
+		ctx, workspaceID, supervisor.AgentID, supervisor.AgentVersionID, userID,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("create supervisor conversation: %w", err)
+	}
+	ctx, finishTrace := courseotel.StartRun(ctx, courseotel.RunContext{
+		WorkspaceID: workspaceID, AgentVersionID: snapshot.ID,
+		ConversationID: conversation.ID, UserID: userID,
+	})
+	defer func() { finishTrace(runErr) }()
+	runStatus := "failed"
+	defer func() {
+		if e.audit == nil || userID == "" || workspaceID == "" {
+			return
+		}
+		_, _ = e.audit.Append(context.WithoutCancel(ctx), audit.Event{
+			WorkspaceID: workspaceID, ActorID: userID, Action: "agent.team_run." + runStatus,
+			ResourceID: conversation.ID, Data: map[string]any{"agent_version_id": snapshot.ID},
+		})
+	}()
 	plan, err := e.executionPlan(ctx, snapshot)
 	if err != nil {
 		return "", nil, err
@@ -46,12 +89,18 @@ func (e *Engine) RunSupervisorTeam(
 			return "", nil, fmt.Errorf("evaluate team input guard: %w", guardErr)
 		}
 		if !decision.Allowed {
+			runStatus = "blocked"
 			return "", nil, fmt.Errorf("team input blocked by guard: %s", strings.Join(decision.Reasons, ", "))
 		}
 		teamInput = decision.SanitizedText
 		plan = e.guardExecutionPlan(plan, snapshot.WorkspaceID)
 	}
 	plan = observeExecutionPlan(plan)
+	if history, ok := e.platform.(ConversationMessageStore); ok {
+		if err := history.AppendMessage(ctx, workspaceID, conversation.ID, "user", teamInput); err != nil {
+			return "", nil, fmt.Errorf("persist supervisor user message: %w", err)
+		}
+	}
 
 	recorder := &teamStepRecorder{}
 	tools := make([]einotool.BaseTool, 0, len(workers))
@@ -88,9 +137,14 @@ func (e *Engine) RunSupervisorTeam(
 	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true}).Query(ctx, teamInput)
 	answer, interrupts, err := consumeADKEvents(iterator)
 	if err != nil {
+		var awaiting *AwaitingApprovalError
+		if errors.As(err, &awaiting) {
+			runStatus = "awaiting_approval"
+		}
 		return "", recorder.snapshot(), err
 	}
 	if len(interrupts) > 0 {
+		runStatus = "awaiting_approval"
 		return "", recorder.snapshot(), fmt.Errorf("team member execution is awaiting approval")
 	}
 	if answer == nil || strings.TrimSpace(answer.Content) == "" {
@@ -102,15 +156,23 @@ func (e *Engine) RunSupervisorTeam(
 			return "", recorder.snapshot(), fmt.Errorf("evaluate team output guard: %w", guardErr)
 		}
 		if !decision.Allowed {
+			runStatus = "blocked"
 			return "", recorder.snapshot(), fmt.Errorf("team output blocked by guard: %s", strings.Join(decision.Reasons, ", "))
 		}
 		answer.Content = decision.SanitizedText
 	}
-	steps := recorder.snapshot()
+	if history, ok := e.platform.(ConversationMessageStore); ok {
+		if err := history.AppendMessage(ctx, workspaceID, conversation.ID, "assistant", answer.Content); err != nil {
+			return "", recorder.snapshot(), fmt.Errorf("persist supervisor assistant message: %w", err)
+		}
+	}
+	runStatus = "completed"
+	steps = recorder.snapshot()
 	steps = append(steps, runtimeteam.Step{
 		Role: supervisor.Role, AgentID: supervisor.AgentID, Input: teamInput, Output: answer.Content,
 	})
-	return answer.Content, steps, nil
+	result = answer.Content
+	return result, steps, nil
 }
 
 type teamMemberAgent struct {

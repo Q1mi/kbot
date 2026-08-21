@@ -127,14 +127,16 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 		} else if len(members) >= 2 {
 			supervisorRuntime, ok := runtime.(interface {
 				RunSupervisorTeam(
-					context.Context, runtimeteam.Member, []runtimeteam.Member, string, runtimeteam.MemberRunner,
+					context.Context, runtimeteam.Member, []runtimeteam.Member, string, string, string, runtimeteam.MemberRunner,
 				) (string, []runtimeteam.Step, error)
 			})
 			if !ok {
 				http.Error(w, "Eino supervisor runtime unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			final, steps, err = supervisorRuntime.RunSupervisorTeam(r.Context(), members[0], members[1:], request.Input, run)
+			final, steps, err = supervisorRuntime.RunSupervisorTeam(
+				r.Context(), members[0], members[1:], request.Input, workspaceID, userID, run,
+			)
 		} else {
 			err = &teamRunError{"supervisor team needs a leader and worker"}
 		}
