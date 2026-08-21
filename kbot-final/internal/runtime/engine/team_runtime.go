@@ -2,20 +2,25 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/middlewares/patchtoolcalls"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/Q1mi/kbot/internal/domain"
+	"github.com/Q1mi/kbot/internal/infrastructure/metrics"
 	"github.com/Q1mi/kbot/internal/runtime/guard"
 	"github.com/Q1mi/kbot/internal/runtime/llm"
+	"github.com/Q1mi/kbot/internal/util"
 )
 
 // TeamMember 是 Supervisor 运行时使用的固定成员版本。
@@ -38,7 +43,7 @@ type TeamStep struct {
 // Guard、审计、工具审批与计量能力。
 func (e *Engine) RunSupervisorTeam(
 	ctx context.Context, supervisor TeamMember, workers []TeamMember, input, workspaceID, userID string,
-) (string, []TeamStep, error) {
+) (answer string, steps []TeamStep, retErr error) {
 	if strings.TrimSpace(input) == "" {
 		return "", nil, fmt.Errorf("team input is required")
 	}
@@ -50,6 +55,36 @@ func (e *Engine) RunSupervisorTeam(
 	if err != nil {
 		return "", nil, err
 	}
+	turns, _ := e.platform.(conversationTurnCoordinator)
+	turnToken := ""
+	turnFinalized := false
+	if turns != nil {
+		turnToken, err = turns.ClaimConversationTurn(ctx, conv.ID, false)
+		if err != nil {
+			return "", nil, fmt.Errorf("claim supervisor conversation turn: %w", err)
+		}
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	ctx = runCtx
+	turnStop := make(chan struct{})
+	turnDone := make(chan error, 1)
+	if turns != nil {
+		go e.renewConversationTurn(ctx, turns, conv.ID, turnToken, turnStop, turnDone, cancelRun)
+	}
+	defer func() {
+		if turns != nil {
+			close(turnStop)
+			if renewErr := <-turnDone; renewErr != nil && retErr == nil {
+				retErr = fmt.Errorf("renew supervisor conversation turn: %w", renewErr)
+			}
+			if !turnFinalized {
+				releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				_ = turns.ReleaseConversationTurn(releaseCtx, conv.ID, turnToken, "active")
+				cancel()
+			}
+		}
+		cancelRun()
+	}()
 	ctx = llm.WithClassification(ctx, conv.Classification)
 	ctx = llm.WithInvocationConfig(ctx, llm.InvocationConfig{
 		WorkspaceID: conv.WorkspaceID, AgentID: conv.AgentID, UserID: conv.UserID,
@@ -61,7 +96,45 @@ func (e *Engine) RunSupervisorTeam(
 		ExperimentVariant:     snapshot.ExperimentVariant,
 	})
 	ctx = guard.WithRateKey(ctx, userID)
-	ctx = guard.WithWorkspaceKey(ctx, workspaceID)
+	ctx = guard.WithWorkspaceKey(ctx, conv.WorkspaceID)
+	traceRequest := ChatStreamRequest{
+		AgentID: supervisor.AgentID, AgentVersionID: conv.AgentVersionID,
+		ConversationID: conv.ID, WorkspaceID: conv.WorkspaceID, Message: input, UserID: userID,
+	}
+	ctx, runSpan, parentSpan, started := e.startChatTrace(
+		ctx, traceRequest, conv.ID, conv.WorkspaceID, conv.AgentID, conv.AgentVersionID,
+		snapshot.PromptVersionID, snapshot.ModelProfileVersionID, snapshot.ExperimentVariant,
+	)
+	defer func() {
+		finishChatTrace(runSpan, parentSpan, answer, retErr, e.traceOptions.CaptureContent)
+	}()
+	if recorder, ok := e.platform.(interface {
+		RecordConversationTraceID(context.Context, string, string) error
+	}); ok {
+		if err := recorder.RecordConversationTraceID(ctx, conv.ID, started.TraceID); err != nil {
+			return "", nil, fmt.Errorf("record supervisor conversation trace: %w", err)
+		}
+	}
+
+	userMessage := input
+	if e.guard != nil {
+		guardCtx, guardSpan := startOperationSpan(ctx, "guard.input",
+			attribute.String("guard.hook", "on_input"),
+			attribute.String("team.role", supervisor.Role),
+		)
+		if e.traceOptions.CaptureContent {
+			guardSpan.SetAttributes(attribute.String("langfuse.observation.input", userMessage))
+		}
+		patched, guardErr := e.guard.OnInput(guardCtx, userMessage)
+		finishOperationSpan(guardCtx, guardSpan, patched, guardErr)
+		if guardErr != nil {
+			metrics.GuardBlocks.WithLabelValues("on_input").Inc()
+			metrics.InjectionsBlocked.Inc()
+			e.recordAudit(ctx, conv.ID, userID, "team_guard_blocked", guardErr.Error())
+			return "", nil, guardErr
+		}
+		userMessage = patched
+	}
 
 	plan, err := e.executionPlan(ctx)
 	if err != nil {
@@ -103,16 +176,49 @@ func (e *Engine) RunSupervisorTeam(
 		return "", nil, fmt.Errorf("create team supervisor: %w", err)
 	}
 
-	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: coordinator, EnableStreaming: true}).Query(ctx, input)
+	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: coordinator, EnableStreaming: true}).Query(ctx, userMessage)
 	answer, interrupts, err := consumeADKEvents(ctx, iterator)
 	if err != nil {
+		var approvalErr *AwaitingApprovalError
+		if errors.As(err, &approvalErr) {
+			e.recordAudit(ctx, conv.ID, userID, "team_await_approval", err.Error())
+		} else {
+			e.recordAudit(ctx, conv.ID, userID, "team_run_failed", err.Error())
+		}
 		return "", recorder.snapshot(), err
 	}
 	if len(interrupts) > 0 {
-		return "", recorder.snapshot(), fmt.Errorf("team member execution is awaiting approval; run the member conversation directly to approve it")
+		err = fmt.Errorf("team execution is awaiting approval")
+		e.recordAudit(ctx, conv.ID, userID, "team_await_approval", err.Error())
+		return "", recorder.snapshot(), err
 	}
-	steps := recorder.snapshot()
-	steps = append(steps, TeamStep{Role: supervisor.Role, AgentID: supervisor.AgentID, Input: input, Output: answer})
+	if e.guard != nil {
+		guardCtx, guardSpan := startOperationSpan(ctx, "guard.output",
+			attribute.String("guard.hook", "on_output"),
+			attribute.String("team.role", supervisor.Role),
+		)
+		if e.traceOptions.CaptureContent {
+			guardSpan.SetAttributes(attribute.String("langfuse.observation.input", answer))
+		}
+		patched, guardErr := e.guard.OnOutput(guardCtx, answer)
+		finishOperationSpan(guardCtx, guardSpan, patched, guardErr)
+		if guardErr != nil {
+			metrics.GuardBlocks.WithLabelValues("on_output").Inc()
+			e.recordAudit(ctx, conv.ID, userID, "team_guard_blocked", guardErr.Error())
+			return "", recorder.snapshot(), guardErr
+		}
+		answer = patched
+	}
+	if err := e.commitConversationTurn(ctx, turns, conv.ID, turnToken, []*domain.Message{
+		{ID: util.GenerateID(), ConversationID: conv.ID, Role: "user", Content: userMessage},
+		{ID: util.GenerateID(), ConversationID: conv.ID, Role: "assistant", Content: answer},
+	}, "active"); err != nil {
+		return "", recorder.snapshot(), fmt.Errorf("save supervisor conversation turn: %w", err)
+	}
+	turnFinalized = true
+	e.recordAudit(ctx, conv.ID, userID, "team_turn", answer)
+	steps = recorder.snapshot()
+	steps = append(steps, TeamStep{Role: supervisor.Role, AgentID: supervisor.AgentID, Input: userMessage, Output: answer})
 	return answer, steps, nil
 }
 

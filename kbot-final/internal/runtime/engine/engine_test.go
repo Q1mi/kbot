@@ -100,6 +100,25 @@ func drain(t *testing.T, ch <-chan AgentEvent) (answer string, events []string) 
 	return answer, events
 }
 
+func TestCollectChatEventsReturnsAwaitingApprovalError(t *testing.T) {
+	events := make(chan AgentEvent, 3)
+	events <- AgentEvent{Type: EventStarted, Data: RunStarted{ConversationID: "conversation-1"}}
+	events <- AgentEvent{Type: EventAwaitApproval, Text: "approval-1", Data: "transfer_funds"}
+	events <- AgentEvent{Type: EventDone, Data: RunFinished{Status: RunStatusAwaitingApproval}}
+	close(events)
+
+	_, err := collectChatEvents(ChatStreamRequest{}, events)
+	approvalErr, ok := err.(*AwaitingApprovalError)
+	if !ok {
+		t.Fatalf("expected AwaitingApprovalError, got %T: %v", err, err)
+	}
+	if approvalErr.ApprovalID != "approval-1" ||
+		approvalErr.ConversationID != "conversation-1" ||
+		approvalErr.ToolName != "transfer_funds" {
+		t.Fatalf("unexpected approval error: %+v", approvalErr)
+	}
+}
+
 func TestChatStreamRejectsConversationOwnershipMismatch(t *testing.T) {
 	e := &Engine{platform: &fakePlatform{snapshot: &AgentSnapshot{ID: "v1", WorkspaceID: "w1", AgentID: "a1"}}}
 	tests := []ChatStreamRequest{

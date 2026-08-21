@@ -73,6 +73,29 @@ func (completeChatRuntime) ChatStream(_ context.Context, req engine.ChatRequest,
 	return emit(engine.Event{Type: "run_finished", Data: map[string]string{"status": "completed"}})
 }
 
+func TestTeamMemberEventCollectorReturnsApprovalPause(t *testing.T) {
+	collector := teamMemberEventCollector{conversationID: "conversation-1"}
+	if err := collector.consume(engine.Event{Type: "approval_requested", Data: map[string]string{
+		"approval_id": "approval-1", "tool_name": "refund", "tool_call_id": "call-1", "tool_version_id": "refund-v1",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.consume(engine.Event{Type: "run_finished", Data: map[string]string{
+		"status": "awaiting_approval",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := collector.result(nil)
+	var approvalErr *engine.AwaitingApprovalError
+	if !errors.As(err, &approvalErr) {
+		t.Fatalf("expected AwaitingApprovalError, got %T: %v", err, err)
+	}
+	if approvalErr.ApprovalID != "approval-1" || approvalErr.ConversationID != "conversation-1" ||
+		approvalErr.ToolName != "refund" || approvalErr.ToolCallID != "call-1" || approvalErr.ToolVersionID != "refund-v1" {
+		t.Fatalf("unexpected approval error: %+v", approvalErr)
+	}
+}
+
 func TestFirstChatCreatesPinnedConversation(t *testing.T) {
 	t.Parallel()
 

@@ -8,4 +8,4 @@ verify-course:
 verify-final:
 	$(MAKE) -C kbot-final build
 	$(MAKE) -C kbot-final test
-	cd kbot-final/web/admin && npm ci && npm run build
+	cd kbot-final/web/admin && npm ci && npm test && npm run build

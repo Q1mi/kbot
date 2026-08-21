@@ -113,13 +113,59 @@ func (e *Engine) Chat(ctx context.Context, req ChatStreamRequest) (string, error
 	if err != nil {
 		return "", err
 	}
+	return collectChatEvents(req, ch)
+}
+
+// AwaitingApprovalError 让同步调用方明确区分“运行失败”和“已暂停等待审批”。
+// Team member、eval target 与 CLI 等同步适配器可将该状态继续向上层传播。
+type AwaitingApprovalError struct {
+	ApprovalID     string
+	ConversationID string
+	ToolName       string
+}
+
+func (e *AwaitingApprovalError) Error() string {
+	detail := "agent run is awaiting approval"
+	if e.ToolName != "" {
+		detail += " for tool " + e.ToolName
+	}
+	if e.ApprovalID != "" {
+		detail += " (approval_id=" + e.ApprovalID + ")"
+	}
+	return detail
+}
+
+func collectChatEvents(req ChatStreamRequest, ch <-chan AgentEvent) (string, error) {
 	var answer string
+	conversationID := req.ConversationID
+	approvalID := ""
+	toolName := ""
 	for ev := range ch {
 		switch ev.Type {
+		case EventStarted:
+			if started, ok := ev.Data.(RunStarted); ok && started.ConversationID != "" {
+				conversationID = started.ConversationID
+			}
 		case EventAnswerDelta:
 			answer += ev.Text
+		case EventAwaitApproval:
+			approvalID = ev.Text
+			if name, ok := ev.Data.(string); ok {
+				toolName = name
+			}
 		case EventError:
 			return "", fmt.Errorf("%s", ev.Text)
+		case EventDone:
+			if finished, ok := ev.Data.(RunFinished); ok && finished.Status == RunStatusAwaitingApproval {
+				return "", &AwaitingApprovalError{
+					ApprovalID: approvalID, ConversationID: conversationID, ToolName: toolName,
+				}
+			}
+		}
+	}
+	if approvalID != "" {
+		return "", &AwaitingApprovalError{
+			ApprovalID: approvalID, ConversationID: conversationID, ToolName: toolName,
 		}
 	}
 	return answer, nil

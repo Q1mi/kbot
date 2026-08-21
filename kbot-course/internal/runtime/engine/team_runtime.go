@@ -39,7 +39,19 @@ func (e *Engine) RunSupervisorTeam(
 	if err != nil {
 		return "", nil, err
 	}
-	plan = observeExecutionPlan(e.guardExecutionPlan(plan, snapshot.WorkspaceID))
+	teamInput := input
+	if e.guard != nil {
+		decision, guardErr := e.guard.Evaluate(ctx, snapshot.WorkspaceID, "on_input", teamInput)
+		if guardErr != nil {
+			return "", nil, fmt.Errorf("evaluate team input guard: %w", guardErr)
+		}
+		if !decision.Allowed {
+			return "", nil, fmt.Errorf("team input blocked by guard: %s", strings.Join(decision.Reasons, ", "))
+		}
+		teamInput = decision.SanitizedText
+		plan = e.guardExecutionPlan(plan, snapshot.WorkspaceID)
+	}
+	plan = observeExecutionPlan(plan)
 
 	recorder := &teamStepRecorder{}
 	tools := make([]einotool.BaseTool, 0, len(workers))
@@ -73,7 +85,7 @@ func (e *Engine) RunSupervisorTeam(
 	if err != nil {
 		return "", nil, fmt.Errorf("create team supervisor: %w", err)
 	}
-	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true}).Query(ctx, input)
+	iterator := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true}).Query(ctx, teamInput)
 	answer, interrupts, err := consumeADKEvents(iterator)
 	if err != nil {
 		return "", recorder.snapshot(), err
@@ -84,9 +96,19 @@ func (e *Engine) RunSupervisorTeam(
 	if answer == nil || strings.TrimSpace(answer.Content) == "" {
 		return "", recorder.snapshot(), fmt.Errorf("team supervisor produced no final answer")
 	}
+	if e.guard != nil {
+		decision, guardErr := e.guard.Evaluate(ctx, snapshot.WorkspaceID, "on_output", answer.Content)
+		if guardErr != nil {
+			return "", recorder.snapshot(), fmt.Errorf("evaluate team output guard: %w", guardErr)
+		}
+		if !decision.Allowed {
+			return "", recorder.snapshot(), fmt.Errorf("team output blocked by guard: %s", strings.Join(decision.Reasons, ", "))
+		}
+		answer.Content = decision.SanitizedText
+	}
 	steps := recorder.snapshot()
 	steps = append(steps, runtimeteam.Step{
-		Role: supervisor.Role, AgentID: supervisor.AgentID, Input: input, Output: answer.Content,
+		Role: supervisor.Role, AgentID: supervisor.AgentID, Input: teamInput, Output: answer.Content,
 	})
 	return answer.Content, steps, nil
 }

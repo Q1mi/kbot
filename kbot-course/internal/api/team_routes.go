@@ -108,14 +108,13 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 			if err != nil {
 				return "", err
 			}
-			answer := ""
-			err = runtime.ChatStream(ctx, engine.ChatRequest{ConversationID: conversation.ID, WorkspaceID: workspaceID, UserID: userID, Message: input}, func(event engine.Event) error {
-				if event.Type == "answer_done" {
-					answer = event.Text
-				}
-				return nil
-			})
-			return answer, err
+			collector := teamMemberEventCollector{conversationID: conversation.ID}
+			err = runtime.ChatStream(
+				ctx,
+				engine.ChatRequest{ConversationID: conversation.ID, WorkspaceID: workspaceID, UserID: userID, Message: input},
+				collector.consume,
+			)
+			return collector.result(err)
 		}
 		members := make([]runtimeteam.Member, len(spec.Members))
 		for index, member := range spec.Members {
@@ -145,6 +144,52 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"final": final, "steps": steps})
 	})
+}
+
+type teamMemberEventCollector struct {
+	conversationID string
+	answer         string
+	status         string
+	approvalID     string
+	toolName       string
+	toolCallID     string
+	toolVersionID  string
+}
+
+func (c *teamMemberEventCollector) consume(event engine.Event) error {
+	switch event.Type {
+	case "answer_done":
+		c.answer = event.Text
+	case "approval_requested":
+		data, ok := event.Data.(map[string]string)
+		if !ok {
+			return &teamRunError{"invalid approval event from member runtime"}
+		}
+		c.approvalID = data["approval_id"]
+		c.toolName = data["tool_name"]
+		c.toolCallID = data["tool_call_id"]
+		c.toolVersionID = data["tool_version_id"]
+	case "run_finished":
+		data, ok := event.Data.(map[string]string)
+		if !ok {
+			return &teamRunError{"invalid run status event from member runtime"}
+		}
+		c.status = data["status"]
+	}
+	return nil
+}
+
+func (c *teamMemberEventCollector) result(runErr error) (string, error) {
+	if runErr != nil {
+		return "", runErr
+	}
+	if c.status == "awaiting_approval" || c.approvalID != "" {
+		return "", &engine.AwaitingApprovalError{
+			ApprovalID: c.approvalID, ConversationID: c.conversationID, ToolName: c.toolName,
+			ToolCallID: c.toolCallID, ToolVersionID: c.toolVersionID,
+		}
+	}
+	return c.answer, nil
 }
 
 type teamRunError struct{ message string }
