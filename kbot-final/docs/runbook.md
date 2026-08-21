@@ -1,16 +1,16 @@
 # kbot Runbook（运行与上线检查）
 
-> 本文覆盖本地 Compose、运行排障和生产部署边界。Kubernetes、HA、备份和灾备需要结合实际基础设施补充。
+> 本文覆盖本地 Compose 与生产化讨论清单。Kubernetes、HA、备份和灾备属于课程演进项。
 
 ## 一、进程 / 资源
 - `deploy/Dockerfile` 使用 Distroless 与 multi-stage build，只复制 Go 二进制和 React 构建产物。
 - PID 1 是 server 进程，接 SIGTERM 优雅退出（`main.go` 已用 `signal.NotifyContext` + `srv.Shutdown`）。
-- SSE/WS 长连接：`WriteTimeout` 必须为 0，避免整体写超时中断事件流；只设置 `ReadHeaderTimeout`。
+- SSE/WS 长连接：`WriteTimeout` 必须为 0（否则整体写超时会掐断流，M01 的坑）；只设 `ReadHeaderTimeout`。
 
 ## 二、外部依赖
-- PostgreSQL：课堂 Compose 使用单实例；生产环境需要配置高可用、备份和恢复演练。
-- Redis：课堂 Compose 使用单实例；生产环境需要根据可用性要求选择 Sentinel 或 Cluster。
-- MinIO：课堂 Compose 使用单实例；生产环境需要配置独立凭据、冗余存储和生命周期策略。
+- PostgreSQL：生产至少主从 + 异步复制（运维不在课程范围，方向性提示）。
+- Redis：单点起步；Sentinel/Cluster 是未来事。
+- MinIO：单点即可；审计冷存路径写清楚。
 
 ## 三、配置（全部走环境变量，不进镜像）
 | 变量 | 必填 | 说明 |
@@ -35,11 +35,11 @@
 | `KBOT_LARK_AGENT_ID` | 否 | 飞书消息默认触发的 Agent ID |
 | `KBOT_AUTOSEED_ADMIN` | 否 | 首启无 admin 用户则自动建一个(仅 dev,prod 置 `false`) |
 | `KBOT_EMBEDDER` | 否 | KB 向量化:`local`(默认,离线确定性)/ `openai`(走 LLM Gateway /embeddings,需真 key) |
-| `KBOT_EMBEDDER_DIM` | 否 | 向量维度,必须 == `kb_chunks.embedding vector(1536)`;默认 1536 |
+| `KBOT_EMBEDDER_DIM` | 否 | 向量维度,必须 == `kb_chunks.embedding vector(1536)`;默认 1536(见 ADR 0006/0009) |
 | `KBOT_EMBEDDER_MODEL` | 否 | openai 模式的 embedding 模型名,默认 `text-embedding-3-small` |
 | `KBOT_S3_ENDPOINT` | 否 | MinIO/S3 端点；空或连接失败时审计归档/导出禁用，数据库分区保持原样 |
 | `KBOT_S3_BUCKET` / `_ACCESS_KEY` / `_SECRET_KEY` | 否 | 对象存储桶与凭证(导出用;归档固定用 `kbot-archive` 桶) |
-| `KBOT_AUDIT_ARCHIVE_AFTER_MONTHS` | 否 | 分区超过该月龄归档 MinIO 后 detach+drop,默认 13 |
+| `KBOT_AUDIT_ARCHIVE_AFTER_MONTHS` | 否 | 分区超过该月龄归档 MinIO 后 detach+drop,默认 13(见 ADR 0010) |
 
 生产建议：`KBOT_ENVIRONMENT=prod`、`KBOT_OTEL_SAMPLE_RATIO=0.1`、
 `KBOT_OTEL_CAPTURE_CONTENT=false`、`KBOT_AUTOSEED_ADMIN=false`。
@@ -55,7 +55,7 @@
   中的 `migrate` 服务执行 `-up`。需要回退或查看版本时，使用对应 Compose project 执行
   `docker compose ... run --rm migrate -down 1` 或 `-version`。
 - **sqlc 代码生成**:`make sqlc-generate`。命令优先使用本机 `sqlc`，缺少二进制时通过 Docker 固定使用
-  `sqlc/sqlc:1.27.0`。生成代码已提交，学员修改 SQL 后才需要重新生成。
+  `sqlc/sqlc:1.27.0`；macOS 源码构建的 cgo 限制见 ADR 0008。
 
 ### 集成测试(store contract test,需 Docker)
 
@@ -88,7 +88,7 @@
 - `KBOT_OLLAMA_BASE_URL` 留空会禁用本地模型;secret 请求会返回错误,避免敏感内容被送往云端。
 - 显式绑定 Model Profile 的请求由 `classification_max` 限制可处理的最高数据分级。
 - 模型拉取：基础 Compose 默认不启动 Ollama。使用 `--profile local-llm` 启动后，`ollama-init` 会拉取配置的模型；手动拉取或更新可运行 `bash scripts/ollama-pull.sh`。
-- **国内加速 ollama pull**:`registry.ollama.ai` 在大陆可能慢或超时。可以给主机或容器配置代理，也可以在有网络的机器预拉镜像和模型；低配置环境可使用 `KBOT_OLLAMA_MODEL=qwen2.5:3b`。
+- **国内加速 ollama pull**:`registry.ollama.ai` 在大陆可能慢/超时。可选:给主机/容器设代理;或在有网机器拉好后 `docker cp` `kbot_ollama` volume;或改小模型 `KBOT_OLLAMA_MODEL=qwen2.5:3b` 降体积。模型 5GB 真拉确实慢(指南 §5.6)。
 
 ## Agent 与 Skill 版本发布
 
@@ -119,10 +119,10 @@ make up
 make demo
 ```
 
-完整实验和排障步骤见 [`docs/labs/langfuse-a2ui-demo.md`](labs/langfuse-a2ui-demo.md)。课堂 profile
+完整讲课和排障步骤见 [`docs/labs/langfuse-a2ui-demo.md`](labs/langfuse-a2ui-demo.md)。课堂 profile
 开启全采样和内容采集；生产配置应按数据分级与合规要求降低采样或关闭内容采集。
 
-轻量运行核心服务时使用 `make up-lite`，配套状态、日志和停止命令为 `make ps-lite`、`make logs-lite`、
+仅开发核心服务时使用 `make up-lite`，配套状态、日志和停止命令为 `make ps-lite`、`make logs-lite`、
 `make down-lite`。两套环境共用默认宿主机端口，切换前需要停止当前环境。
 
 ## 七、协议型工具

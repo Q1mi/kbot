@@ -71,20 +71,6 @@ func (e *Engine) RunSupervisorTeam(
 	if turns != nil {
 		go e.renewConversationTurn(ctx, turns, conv.ID, turnToken, turnStop, turnDone, cancelRun)
 	}
-	defer func() {
-		if turns != nil {
-			close(turnStop)
-			if renewErr := <-turnDone; renewErr != nil && retErr == nil {
-				retErr = fmt.Errorf("renew supervisor conversation turn: %w", renewErr)
-			}
-			if !turnFinalized {
-				releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				_ = turns.ReleaseConversationTurn(releaseCtx, conv.ID, turnToken, "active")
-				cancel()
-			}
-		}
-		cancelRun()
-	}()
 	ctx = llm.WithClassification(ctx, conv.Classification)
 	ctx = llm.WithInvocationConfig(ctx, llm.InvocationConfig{
 		WorkspaceID: conv.WorkspaceID, AgentID: conv.AgentID, UserID: conv.UserID,
@@ -106,6 +92,18 @@ func (e *Engine) RunSupervisorTeam(
 		snapshot.PromptVersionID, snapshot.ModelProfileVersionID, snapshot.ExperimentVariant,
 	)
 	defer func() {
+		if turns != nil {
+			close(turnStop)
+			if renewErr := <-turnDone; renewErr != nil && retErr == nil {
+				retErr = fmt.Errorf("renew supervisor conversation turn: %w", renewErr)
+			}
+			if !turnFinalized {
+				releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				_ = turns.ReleaseConversationTurn(releaseCtx, conv.ID, turnToken, "active")
+				cancel()
+			}
+		}
+		cancelRun()
 		finishChatTrace(runSpan, parentSpan, answer, retErr, e.traceOptions.CaptureContent)
 	}()
 	if recorder, ok := e.platform.(interface {

@@ -239,7 +239,7 @@ func (r *ADKRunner) approvalInterrupt(bindings map[string]ToolBinding) func(cont
 
 func (r *ADKRunner) persistInterrupts(ctx context.Context, checkpoint []byte, interrupts []*adk.InterruptCtx) error {
 	if len(checkpoint) == 0 {
-		return fmt.Errorf("Eino did not produce an approval checkpoint")
+		return fmt.Errorf("eino did not produce an approval checkpoint")
 	}
 	for _, interrupt := range interrupts {
 		if interrupt == nil || !interrupt.IsRootCause {

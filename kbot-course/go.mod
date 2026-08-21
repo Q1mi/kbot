@@ -1,6 +1,6 @@
 module github.com/Q1mi/kbot
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/cloudwego/eino v0.9.15

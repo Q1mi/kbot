@@ -572,7 +572,7 @@ func persistApprovalInterrupts(
 		return nil
 	}
 	if len(checkpoint) == 0 {
-		return fmt.Errorf("Eino did not produce an approval checkpoint")
+		return fmt.Errorf("eino did not produce an approval checkpoint")
 	}
 	for _, interrupt := range contexts {
 		if interrupt == nil || !interrupt.IsRootCause {

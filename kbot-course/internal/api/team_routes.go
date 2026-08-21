@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -140,12 +141,36 @@ func registerTeamRoutes(router chi.Router, iamService *iam.Service, runtime Chat
 		} else {
 			err = &teamRunError{"supervisor team needs a leader and worker"}
 		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"final": final, "steps": steps})
+		writeTeamRunResponse(w, final, steps, err)
 	})
+}
+
+type teamRunResponse struct {
+	Status         string             `json:"status"`
+	Final          string             `json:"final,omitempty"`
+	Steps          []runtimeteam.Step `json:"steps,omitempty"`
+	ApprovalID     string             `json:"approval_id,omitempty"`
+	ConversationID string             `json:"conversation_id,omitempty"`
+	ToolName       string             `json:"tool_name,omitempty"`
+}
+
+func writeTeamRunResponse(w http.ResponseWriter, final string, steps []runtimeteam.Step, runErr error) {
+	if runErr == nil {
+		writeJSON(w, http.StatusOK, teamRunResponse{Status: "completed", Final: final, Steps: steps})
+		return
+	}
+	var awaiting *engine.AwaitingApprovalError
+	if errors.As(runErr, &awaiting) {
+		writeJSON(w, http.StatusAccepted, teamRunResponse{
+			Status:         "awaiting_approval",
+			Steps:          steps,
+			ApprovalID:     awaiting.ApprovalID,
+			ConversationID: awaiting.ConversationID,
+			ToolName:       awaiting.ToolName,
+		})
+		return
+	}
+	http.Error(w, runErr.Error(), http.StatusBadGateway)
 }
 
 type teamMemberEventCollector struct {

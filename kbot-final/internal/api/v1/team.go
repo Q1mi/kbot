@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/Q1mi/kbot/internal/api/middleware"
@@ -131,6 +132,16 @@ type RunByEnvRequest struct {
 	Input  string `json:"input"`
 }
 
+// TeamRunResponse 表示 Team 同步运行的完成或等待审批状态。
+type TeamRunResponse struct {
+	Status         string      `json:"status"`
+	Final          string      `json:"final,omitempty"`
+	Steps          []team.Step `json:"steps,omitempty"`
+	ApprovalID     string      `json:"approval_id,omitempty"`
+	ConversationID string      `json:"conversation_id,omitempty"`
+	ToolName       string      `json:"tool_name,omitempty"`
+}
+
 // Run 按 team_id 和 env 拉取当前版本快照并执行协作。
 func (h *TeamHandler) Run(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserIDFromContext(r.Context())
@@ -151,11 +162,7 @@ func (h *TeamHandler) Run(w http.ResponseWriter, r *http.Request) {
 	}
 	members := toRuntimeMembers(spec.Members)
 	final, steps, runErr := h.runTeam(r.Context(), spec.Mode, members, req.Input, workspaceID, userID)
-	if runErr != nil {
-		http.Error(w, runErr.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"final": final, "steps": steps})
+	writeTeamRunResponse(w, final, steps, runErr)
 }
 
 // AdHocRequest 临时编排请求(调试入口,不落库)。
@@ -183,11 +190,26 @@ func (h *TeamHandler) AdHoc(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	final, steps, err := h.runTeam(r.Context(), req.Mode, req.Members, req.Input, workspaceID, userID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	writeTeamRunResponse(w, final, steps, err)
+}
+
+func writeTeamRunResponse(w http.ResponseWriter, final string, steps []team.Step, runErr error) {
+	if runErr == nil {
+		writeJSON(w, http.StatusOK, TeamRunResponse{Status: "completed", Final: final, Steps: steps})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"final": final, "steps": steps})
+	var awaiting *engine.AwaitingApprovalError
+	if errors.As(runErr, &awaiting) {
+		writeJSON(w, http.StatusAccepted, TeamRunResponse{
+			Status:         "awaiting_approval",
+			Steps:          steps,
+			ApprovalID:     awaiting.ApprovalID,
+			ConversationID: awaiting.ConversationID,
+			ToolName:       awaiting.ToolName,
+		})
+		return
+	}
+	http.Error(w, runErr.Error(), http.StatusInternalServerError)
 }
 
 // runTeam 按 mode 跑 Supervisor / Pipeline(Run 与 AdHoc 共用)。

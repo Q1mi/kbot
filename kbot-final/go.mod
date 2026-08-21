@@ -1,6 +1,6 @@
 module github.com/Q1mi/kbot
 
-go 1.26.5
+go 1.26.6
 
 // 注：Eino 仍在 0.x 演进；框架相关 API 已收敛在 internal/runtime/llm/gateway.go，
 // Runtime 直接使用 Eino 的 ChatModel、ADK Runner、ToolsNode 与中间件能力。

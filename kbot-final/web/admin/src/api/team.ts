@@ -23,8 +23,12 @@ export interface RunByEnvRequest {
 }
 
 export interface TeamRunResult {
-  final: string
-  steps: { agent_id?: string; output?: string; [k: string]: unknown }[]
+  status: 'completed' | 'awaiting_approval'
+  final?: string
+  steps?: { agent_id?: string; output?: string; [k: string]: unknown }[]
+  approval_id?: string
+  conversation_id?: string
+  tool_name?: string
 }
 
 // 按持久化团队 + env 跑一次协作。

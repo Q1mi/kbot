@@ -4,6 +4,7 @@ import {
 import { PlusOutlined, MinusCircleOutlined, PlayCircleOutlined, BranchesOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useLocation } from 'wouter'
 import {
   listTeams, createTeam, runTeam, listTeamVersions, createTeamVersion, promoteTeamVersion,
   type TeamRunResult,
@@ -15,6 +16,7 @@ import { useAuthStore } from '@/store/authStore'
 
 export function TeamsPage() {
   const qc = useQueryClient()
+  const [, navigate] = useLocation()
   const workspaceId = useAuthStore((s) => s.workspaceId)
   const [open, setOpen] = useState(false)
   const [runOpen, setRunOpen] = useState<Team | null>(null)
@@ -54,7 +56,10 @@ export function TeamsPage() {
   const run = useMutation({
     mutationFn: (vars: { team_id: string; input: string; env: string }) =>
       runTeam({ team_id: vars.team_id, env: vars.env, input: vars.input }),
-    onSuccess: (res) => setRunResult(res),
+    onSuccess: (res) => {
+      setRunResult(res)
+      if (res.status === 'awaiting_approval') message.info('团队运行已暂停，等待人工审批')
+    },
   })
 
   const newVersion = useMutation({
@@ -282,12 +287,30 @@ export function TeamsPage() {
         </Form>
         {runResult && (
           <Card size="small" title="结果" style={{ marginTop: 8 }}>
-            <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-              <Typography.Text strong>最终输出:</Typography.Text>
-              <br />
-              {runResult.final}
-            </Typography.Paragraph>
-            {runResult.steps?.length > 0 && (
+            {runResult.status === 'awaiting_approval' ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="运行已暂停，等待审批"
+                description={(
+                  <Space direction="vertical" size={2}>
+                    <Typography.Text>工具：{runResult.tool_name || '-'}</Typography.Text>
+                    <Typography.Text>审批 ID：{runResult.approval_id || '-'}</Typography.Text>
+                    <Typography.Text>会话 ID：{runResult.conversation_id || '-'}</Typography.Text>
+                    <Button type="link" style={{ padding: 0 }} onClick={() => navigate('/guard')}>
+                      前往 Guard / 审批
+                    </Button>
+                  </Space>
+                )}
+              />
+            ) : (
+              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                <Typography.Text strong>最终输出:</Typography.Text>
+                <br />
+                {runResult.final || '-'}
+              </Typography.Paragraph>
+            )}
+            {runResult.steps && runResult.steps.length > 0 && (
               <>
                 <Divider style={{ margin: '8px 0' }} />
                 <Typography.Text type="secondary">步骤数:{runResult.steps.length}</Typography.Text>

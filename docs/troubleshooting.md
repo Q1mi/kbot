@@ -17,7 +17,7 @@ go version
 cat go.mod | head
 ```
 
-课程和最终版统一使用 Go 1.26.5。升级工具链后重新执行 `go mod download`。
+课程和最终版统一使用 Go 1.26.6。升级工具链后重新执行 `go mod download`。
 
 ## 前端依赖或构建失败
 

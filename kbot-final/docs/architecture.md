@@ -1,6 +1,6 @@
 # kbot 架构综述
 
-> 本文帮助学员在 30 分钟内建立全局认知。运行方式见 [runbook.md](runbook.md)，课程与最终版本的关系见仓库根目录的 [能力对照](../../docs/course-to-final.md)。
+> 本文帮助学员在 30 分钟内建立全局认知。实现状态与演进边界以 [status.md](status.md) 为准。
 
 ## 一句话
 
@@ -23,11 +23,11 @@ kbot 是面向 Go 开发者的企业级 AI Agent 教学平台：工程师开发�
 
 ## 关键机制（按能力域）
 
-- **基础与接入**：IAM（JWT + 中间件链 recover→requestid→log→trace→CORS→auth→workspace）、Agent Runtime、SSE/WS 与 Docker Compose。
-- **工具与知识**：Tool Registry（rest_api/mcp_server/internal_sdk/code_execution/a2a 五源，平台 `Executor` 适配 Eino `InvokableTool`）、独立 Sandbox Runner、KB Connector、ingest 状态机和 Eino Retriever Router 混合检索。
-- **配置治理**：Prompt/模型不可变版本、环境基线、Candidate 灰度、Provider Account/Deployment/Profile 控制面、Eino ChatTemplate、缓存与 Pub/Sub；Skills 使用 Eino Skill Middleware 渐进式披露；Agent/Conversation 配置快照。
-- **质量与安全**：Guard、Eval 门禁、Audit、Embedding/Redis 缓存、OpenTelemetry、Prometheus 与 Langfuse。
-- **开放集成**：Supervisor 使用 Eino `AgentTool`，Pipeline 保持确定性顺序编排；支持 A2A v1.0.1、A2UI v0.9.1、飞书/Webhook、Go SDK 与 kbotctl。
+- **M1 地基**：IAM（JWT + 中间件链 recover→requestid→log→trace→CORS→auth→workspace）、最简 Runtime、SSE/WS、docker-compose。
+- **M2 能力**：Tool Registry（rest_api/mcp_server/internal_sdk/code_execution/a2a 五源，平台 `Executor` 适配 Eino `InvokableTool`）、Docker Sandbox、KB（Connector + ingest 状态机 + Eino Retriever Router + PostgreSQL 混合检索）。
+- **M3 配方**：Prompt/模型原子不可变版本、环境基线、Candidate 灰度、Provider Account/Deployment/Profile 控制面、Eino ChatTemplate、本地缓存与 Pub/Sub；Skills 使用 Eino Skill Middleware 实现 L1/L2 渐进式披露；Agent/Conversation 固化配置快照。
+- **M4 工程化**：Guard（注入/PII/限流/配额/分级路由，按 4 个 Hook 注入）、Eval 门禁（三层 Judge + CI 阻断）、Audit（对话与 Tool/Skill/Sandbox 结构化飞行记录仪）、Cache（Embedding/Redis 幂等与分布式锁）、OTel GenAI 语义约定 + Prometheus + Langfuse。
+- **M5 向外**：多 Agent（Supervisor 使用 ChatModelAgent + AgentTool，Pipeline 使用确定性顺序编排）、A2A v1.0.1 互联（AgentCard + JSON-RPC `SendMessage`）、A2UI v0.9.1 受控生成式 UI、飞书/Webhook 入站适配、Go SDK + kbotctl。
 
 ## 数据流：一次对话
 
@@ -65,8 +65,8 @@ Docker Socket 具备宿主机高权限，Runner 应部署在专用节点或开�
 
 ## 技术选型要点
 
-Go 1.26.5 · chi 路由 · pgx + sqlc · PostgreSQL + pgvector · go-redis · asynq · JWT · AES-GCM ·
-Eino v0.9.15 ChatModel / ADK · OTel + Langfuse + Prometheus · A2UI v0.9.1。
+Go 1.26.6 · chi 路由 · pgx + sqlc · PostgreSQL + pgvector · go-redis · asynq · JWT · AES-GCM ·
+Eino v0.9.15 ChatModel / ADK · OTel + Langfuse + Prometheus · A2UI v0.9.1。详见 `docs/adr/`。
 
 ## Langfuse 与 A2UI 的边界
 
@@ -75,9 +75,12 @@ Langfuse 接收 OTel traces，承担模型调用、Token、Guard、Tool 和审�
 
 A2UI 负责在对话流中传递声明式 surface。服务端与浏览器共同限制 Catalog、组件和 action；真正的审批
 状态变更仍由带身份、Workspace 和业务归属校验的 API 完成。当前受控组件集聚焦敏感工具审批，详见
-具体演示流程见 `docs/labs/langfuse-a2ui-demo.md`。
+ADR 0021、ADR 0022 和 `docs/labs/langfuse-a2ui-demo.md`。
 
-当前 Compose 使用 PostgreSQL `simple + ts_rank_cd`、pgvector 和应用层 RRF，形成可独立运行的混合检索基线。
+**检索演进目标**：当前 Compose 装配使用 PostgreSQL `simple + ts_rank_cd`、pgvector 和应用层 RRF，
+作为轻量可运行基线。课程终态按 ADR 0019 增加 OpenSearch：PostgreSQL 作为事实数据源，
+通过 Transactional Outbox + Asynq 同步可重建搜索索引，使用 IK 中文分词、BM25、k-NN 和 RRF；
+pgvector 保留为轻量部署与故障降级实现。
 
 ## 当前实现边界
 
@@ -85,7 +88,7 @@ A2UI 负责在对话流中传递声明式 surface。服务端与浏览器共同�
 各 `Memory*Store` 仍作为测试 fixture 和 `db == nil` 时的轻量装配存在，同一组 contract test 会验证内存与
 PostgreSQL 两种实现。
 
-当前实现边界以根目录 README、Runbook 和自动化测试为准。
+当前实现边界与验证结果以 [`docs/status.md`](status.md) 和代码为准。
 
 主运行路径是：
 
