@@ -1,6 +1,6 @@
 # kbot 架构综述
 
-> 本文帮助学员在 30 分钟内建立全局认知。实现状态与演进边界以 [status.md](status.md) 为准。
+> 本文帮助学员在 30 分钟内建立全局认知，并说明当前实现边界与后续演进方向。
 
 ## 一句话
 
@@ -66,7 +66,7 @@ Docker Socket 具备宿主机高权限，Runner 应部署在专用节点或开�
 ## 技术选型要点
 
 Go 1.26.6 · chi 路由 · pgx + sqlc · PostgreSQL + pgvector · go-redis · asynq · JWT · AES-GCM ·
-Eino v0.9.15 ChatModel / ADK · OTel + Langfuse + Prometheus · A2UI v0.9.1。详见 `docs/adr/`。
+Eino v0.9.15 ChatModel / ADK · OTel + Langfuse + Prometheus · A2UI v0.9.1。
 
 ## Langfuse 与 A2UI 的边界
 
@@ -75,10 +75,10 @@ Langfuse 接收 OTel traces，承担模型调用、Token、Guard、Tool 和审�
 
 A2UI 负责在对话流中传递声明式 surface。服务端与浏览器共同限制 Catalog、组件和 action；真正的审批
 状态变更仍由带身份、Workspace 和业务归属校验的 API 完成。当前受控组件集聚焦敏感工具审批，详见
-ADR 0021、ADR 0022 和 `docs/labs/langfuse-a2ui-demo.md`。
+`docs/labs/langfuse-a2ui-demo.md`。
 
 **检索演进目标**：当前 Compose 装配使用 PostgreSQL `simple + ts_rank_cd`、pgvector 和应用层 RRF，
-作为轻量可运行基线。课程终态按 ADR 0019 增加 OpenSearch：PostgreSQL 作为事实数据源，
+作为轻量可运行基线。后续生产演进可增加 OpenSearch：PostgreSQL 作为事实数据源，
 通过 Transactional Outbox + Asynq 同步可重建搜索索引，使用 IK 中文分词、BM25、k-NN 和 RRF；
 pgvector 保留为轻量部署与故障降级实现。
 
@@ -88,7 +88,7 @@ pgvector 保留为轻量部署与故障降级实现。
 各 `Memory*Store` 仍作为测试 fixture 和 `db == nil` 时的轻量装配存在，同一组 contract test 会验证内存与
 PostgreSQL 两种实现。
 
-当前实现边界与验证结果以 [`docs/status.md`](status.md) 和代码为准。
+当前实现边界与验证结果以本节、根目录 README 和代码为准。
 
 主运行路径是：
 

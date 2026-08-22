@@ -22,7 +22,7 @@ kbot 是一个面向 Go 开发者的企业级 Agent 教学平台，覆盖 Agent 
 | [跨境电商运营与供应链协同 Agent](projects/crossborder/README.md) | 订单履约、库存调拨、物流方案、退款、结算对账 | `make crossborder-up crossborder-install crossborder-e2e` |
 | [保险承保、理赔与反欺诈 Agent](projects/insurance/README.md) | 人工核保、责任审核、赔款计算、支付冻结、欺诈调查 | `make insurance-up insurance-install insurance-e2e` |
 
-两个项目拥有各自的领域模型、Tool 契约、Skill、知识库、Eval、Dockerfile 和 Compose 文件，业务代码之间没有依赖。隔离决策见 [ADR 0026](docs/adr/0026-independent-vertical-projects.md)。
+两个项目拥有各自的领域模型、Tool 契约、Skill、知识库、Eval、Dockerfile 和 Compose 文件，业务代码之间没有依赖。
 
 两套课堂环境可以同时启动：跨境电商控制台使用 `http://localhost:8181`，保险控制台使用 `http://localhost:8182`；PostgreSQL、Redis、Worker 与数据卷也分别隔离。
 
@@ -116,7 +116,7 @@ cmd/worker → KB ingest / approval resume / partition maintenance
 cmd/sandbox-runner → 内部 HTTP API / Docker 容器创建 / 资源与安全边界
 ```
 
-架构细节见 [docs/architecture.md](docs/architecture.md)，关键取舍见 [docs/adr](docs/adr)。
+架构细节见 [docs/architecture.md](docs/architecture.md)。
 
 ## 快速启动
 
@@ -235,7 +235,7 @@ docker compose -f deploy/docker-compose.yml config --quiet
 make openapi
 ```
 
-性能基线和复现方式见 [docs/perf.md](docs/perf.md)。Go SDK 位于 `pkg/sdk/go`，运维 CLI 位于 `cmd/kbotctl`：
+Go SDK 位于 `pkg/sdk/go`，运维 CLI 位于 `cmd/kbotctl`：
 
 ```bash
 go run ./cmd/kbotctl -- \
@@ -254,10 +254,10 @@ internal/infrastructure PostgreSQL、Redis、Asynq、MinIO、OTel、Metrics
 migrations/             26 组 golang-migrate 数据库迁移
 web/admin/              React + Ant Design Admin Console
 deploy/                 基础与 Langfuse Docker Compose、镜像构建文件
-scripts/                初始化、演示、压测和课堂环境脚本
+scripts/                初始化、演示和课堂环境脚本
 projects/crossborder/   独立跨境电商 Agent 业务项目
 projects/insurance/     独立保险 Agent 业务项目
-docs/                   架构、ADR、Runbook、课程大纲与课堂实验
+docs/                   架构、Runbook、业务预设与课堂实验
 ```
 
 ## 当前边界与路线图
@@ -266,25 +266,20 @@ docs/                   架构、ADR、Runbook、课程大纲与课堂实验
 
 后续演进项：
 
-- PostgreSQL Outbox + OpenSearch（IK/BM25/k-NN/RRF），设计见 [ADR 0019](docs/adr/0019-opensearch-production-retrieval.md)。
+- PostgreSQL Outbox + OpenSearch（IK/BM25/k-NN/RRF）。
 - OpenAPI 3 与 Go/TypeScript 客户端自动生成，当前 Swagger 2.0 与两端类型仍独立维护。
 - SSO/OIDC、API Key 鉴权、集中式策略治理、外部 Secret Manager、Kubernetes、HA、备份与灾备。
 - 大规模语料下的索引调优、容量测试、SSE/WS 长连接压测和真实模型成本基线。
 
-当前状态以 [docs/status.md](docs/status.md) 为准。早期 Milestone、Phase 和 Claude 自驱实施日志已从仓库清理，避免学员把历史路径和失效配置当成当前用法。
+当前实现范围与验证方式以本 README、架构综述和代码为准。早期 Milestone、Phase 和开发阶段实施日志已从交付仓库清理，避免学员把历史路径和失效配置当成当前用法。
 
 ## 文档导航
 
-- [当前状态](docs/status.md)
 - [架构综述](docs/architecture.md)
 - [运行与配置](docs/runbook.md)
-- [视频实战课程授课方案](docs/video-course-teaching-plan.md)
-- [24 集最小代码版本设计](docs/course-episode-version-plan.md)
-- [课程介绍与宣传文案](docs/course-marketing-copy.md)
-- [项目篇课程大纲](docs/project-course-outline.md)
-- [50 集完整课程大纲](docs/course-outline.md) / [30 集精简版](docs/course-outline-slim.md)
+- [课程业务资产](docs/course-business-assets.md)
+- [课程 Prompt 预设](docs/course-prompt-presets.md)
 - [Langfuse + A2UI 实验](docs/labs/langfuse-a2ui-demo.md)
 - [MCP 集成](docs/integrations/mcp.md) / [A2A 集成](docs/integrations/a2a.md) / [Webhook 集成](docs/integrations/webhook.md) / [飞书集成](docs/integrations/lark.md)
-- [架构决策记录](docs/adr)
 
-欢迎通过 ADR 记录影响多个模块的设计决策，并在提交前跑完与改动范围相匹配的测试。
+提交前请跑完与改动范围相匹配的测试。
