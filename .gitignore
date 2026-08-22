@@ -22,3 +22,6 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+
+# Instructor-only local recording plan
+/teaching-plan.md
