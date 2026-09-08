@@ -3,6 +3,7 @@
 ## 课程资料
 
 - [课程地图](docs/course-map.md)
+- [第 19 课：Trace 与 Langfuse 接入、演示和验证](docs/langfuse.md)
 
 ## 豆包模型准备
 

@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 
+	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
 	platformskill "github.com/Q1mi/kbot/internal/platform/skill"
 	"github.com/Q1mi/kbot/internal/runtime/skillrunner"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func decodeFrameworkCheckpoint(payload []byte) ([]byte, string, string, error) {
@@ -22,7 +25,7 @@ func decodeFrameworkCheckpoint(payload []byte) ([]byte, string, string, error) {
 }
 
 // ResumeApproved 通过 Eino ResumeWithParams 精确恢复被批准的中断地址。
-func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, checkpoint []byte, emit Emitter) error {
+func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, checkpoint []byte, emit Emitter) (runErr error) {
 	if request == nil || request.RunID == "" || request.ToolCallID == "" || request.ToolVersionID == "" {
 		return fmt.Errorf("complete approval binding is required")
 	}
@@ -36,6 +39,13 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 	if snapshot.WorkspaceID != request.WorkspaceID {
 		return fmt.Errorf("approval and conversation workspaces do not match")
 	}
+	ctx, finish := courseotel.StartRun(ctx, courseotel.RunContext{
+		WorkspaceID: request.WorkspaceID, AgentVersionID: snapshot.ID,
+		ConversationID: request.RunID, UserID: request.DecidedBy,
+	})
+	defer func() { finish(runErr) }()
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("kbot.run.resumed", true))
+	courseotel.RecordInput(ctx, map[string]string{"approval_id": request.ID, "tool_call_id": request.ToolCallID})
 	bindings, err := e.tools.Bind(ctx, request.WorkspaceID, snapshot.ToolVersionIDs)
 	if err != nil {
 		return fmt.Errorf("bind pinned tools: %w", err)
@@ -120,6 +130,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, request *approval.Request, 
 			return fmt.Errorf("persist resumed assistant message: %w", err)
 		}
 	}
+	courseotel.RecordOutput(ctx, answer.Content)
 	for _, delta := range answerDeltas(answer.Content, 8) {
 		if err := emitContext(ctx, emit, Event{Type: "answer_delta", Text: delta}); err != nil {
 			return err

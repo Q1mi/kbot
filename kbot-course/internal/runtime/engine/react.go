@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/platform/approval"
@@ -371,14 +372,18 @@ func (t *bindingTool) InvokableRun(ctx context.Context, arguments string, _ ...e
 		operation = "sandbox.execute"
 	}
 	toolContext, finish := courseotel.StartOperation(ctx, operation,
+		attribute.String("langfuse.observation.type", "tool"),
 		attribute.String("gen_ai.tool.name", t.binding.Name),
 		attribute.String("kbot.tool.version.id", t.binding.VersionID),
 		attribute.String("kbot.tool.call.id", callID),
 	)
+	courseotel.RecordInput(toolContext, arguments)
 	result, err := t.executor.Execute(toolContext, tooling.Call{
 		WorkspaceID: t.workspaceID, ToolVersionID: t.binding.VersionID,
 		Arguments: []byte(arguments), IdempotencyKey: "react:" + callID,
 	})
+	courseotel.RecordOutput(toolContext, string(result.Body))
+	trace.SpanFromContext(toolContext).SetAttributes(attribute.Int("http.response.status_code", result.StatusCode))
 	finish(err)
 	if t.audit != nil && t.actorID != "" {
 		data := map[string]any{"conversation_id": t.runID, "tool_call_id": callID, "status_code": result.StatusCode}

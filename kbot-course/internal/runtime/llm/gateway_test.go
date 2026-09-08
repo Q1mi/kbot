@@ -63,11 +63,17 @@ func TestPrepareExecutionBuildsEinoRetryAndFailover(t *testing.T) {
 	if plan.Model == nil || plan.Retry == nil || plan.Retry.MaxRetries != 3 {
 		t.Fatalf("execution plan = %+v", plan)
 	}
+	if ModelName(plan.Model) != "primary" {
+		t.Fatal("primary model identity was lost")
+	}
 	if plan.Failover == nil || plan.Failover.MaxRetries != 1 {
 		t.Fatalf("failover config = %+v", plan.Failover)
 	}
 	backup, replacement, err := plan.Failover.GetFailoverModel(t.Context(), &adk.FailoverContext[*schema.Message]{FailoverAttempt: 1})
 	if err != nil || backup == nil || replacement != nil {
 		t.Fatalf("backup=%v replacement=%v err=%v", backup, replacement, err)
+	}
+	if ModelName(backup) != "backup" {
+		t.Fatal("failover model identity was lost")
 	}
 }

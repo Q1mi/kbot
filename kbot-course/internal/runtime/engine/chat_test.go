@@ -249,6 +249,7 @@ func TestChatStreamRunsPinnedRESTToolEndToEnd(t *testing.T) {
 }
 
 func TestSensitiveToolPausesThroughEinoStatefulInterrupt(t *testing.T) {
+	recorder := traceRecorder(t)
 	var toolCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		toolCalls.Add(1)
@@ -315,6 +316,23 @@ func TestSensitiveToolPausesThroughEinoStatefulInterrupt(t *testing.T) {
 	}
 	if toolCalls.Load() != 1 || resumedAnswer != "退款已提交" {
 		t.Fatalf("toolCalls=%d answer=%q", toolCalls.Load(), resumedAnswer)
+	}
+	rootIDs := map[string]bool{}
+	resumedRoots := 0
+	for _, span := range recorder.Ended() {
+		attrs := spanAttrs(span)
+		if attrs["langfuse.session.id"].AsString() != "c1" {
+			t.Fatalf("missing session on %s", span.Name())
+		}
+		if span.Name() == "agent.run" {
+			rootIDs[span.SpanContext().TraceID().String()] = true
+			if attrs["kbot.run.resumed"].AsBool() {
+				resumedRoots++
+			}
+		}
+	}
+	if len(rootIDs) != 2 || resumedRoots != 1 {
+		t.Fatal("approval resume should start a new trace in the original session")
 	}
 }
 

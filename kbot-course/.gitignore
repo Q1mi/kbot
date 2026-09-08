@@ -1,6 +1,7 @@
 # 本地环境与系统文件
 .DS_Store
 .env
+!.env.langfuse.example
 
 # Go 构建与测试产物
 coverage.out

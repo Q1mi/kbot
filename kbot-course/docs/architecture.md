@@ -60,3 +60,8 @@ Server 会安装带批量导出的 OpenTelemetry SDK。将 OTLP/HTTP 地址指�
 `OTEL_EXPORTER_OTLP_HEADERS` 提供认证信息。Agent Run 携带 Workspace、Agent Version、
 Conversation 和 User 稳定维度，模型与工具操作作为子 Span 输出；高风险操作同时写入
 按 Workspace 隔离的哈希链审计账本。
+
+第 19 课的完整配置与可运行示例见 [Langfuse 接入指南](langfuse.md)。
+公共属性传播至每个业务子 Span；模型记录身份、显式参数及供应商用量，工具记录执行状态。
+设置 `KBOT_TRACE_CONTENT=true` 后采集有限长的输入输出并遮盖常见结构化凭据字段。
+流式 Span 持续到 EOF、读取错误、取消或所属 Run 收尾；审批恢复会创建关联同一会话的新 Trace。

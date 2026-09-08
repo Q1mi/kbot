@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	"github.com/Q1mi/kbot/internal/platform/audit"
@@ -54,7 +55,11 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		ConversationID: req.ConversationID, UserID: req.UserID,
 	})
 	defer func() { finishTrace(runErr) }()
+	courseotel.RecordInput(ctx, map[string]string{"message": req.Message})
 	runStatus := "failed"
+	defer func() {
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("kbot.run.status", runStatus))
+	}()
 	defer func() {
 		if e.audit == nil || req.UserID == "" || snapshot.WorkspaceID == "" {
 			return
@@ -84,6 +89,7 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 	}
 	if err := emitContext(ctx, emit, Event{Type: "run_started", Data: map[string]string{
 		"conversation_id": req.ConversationID, "agent_version_id": snapshot.ID,
+		"trace_id": trace.SpanFromContext(ctx).SpanContext().TraceID().String(),
 	}}); err != nil {
 		return err
 	}
@@ -156,6 +162,7 @@ func (e *Engine) ChatStream(ctx context.Context, req ChatRequest, emit Emitter) 
 		}
 		answer.Content = decision.SanitizedText
 	}
+	courseotel.RecordOutput(ctx, answer.Content)
 	if history, ok := e.platform.(ConversationMessageStore); ok {
 		if historyErr := history.AppendMessage(ctx, snapshot.WorkspaceID, req.ConversationID, "assistant", answer.Content); historyErr != nil {
 			return fmt.Errorf("persist assistant message: %w", historyErr)
@@ -298,6 +305,8 @@ func (e *Engine) runPlan(
 	return answer, streamed, err
 }
 
+func (m guardedChatModel) ModelName() string { return llm.ModelName(m.next) }
+
 type guardedChatModel struct {
 	next        model.BaseChatModel
 	guard       RuntimeGuard
@@ -348,24 +357,6 @@ func (e *Engine) guardExecutionPlan(plan *llm.ExecutionPlan, workspaceID string)
 		guarded.Failover = &failover
 	}
 	return &guarded
-}
-
-type observedChatModel struct{ next model.BaseChatModel }
-
-func (m observedChatModel) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (answer *schema.Message, err error) {
-	ctx, finish := courseotel.StartOperation(ctx, "llm.generate",
-		attribute.String("gen_ai.operation.name", "chat"),
-	)
-	defer func() { finish(err) }()
-	return m.next.Generate(ctx, messages, opts...)
-}
-
-func (m observedChatModel) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (stream *schema.StreamReader[*schema.Message], err error) {
-	ctx, finish := courseotel.StartOperation(ctx, "llm.stream",
-		attribute.String("gen_ai.operation.name", "chat"),
-	)
-	defer func() { finish(err) }()
-	return m.next.Stream(ctx, messages, opts...)
 }
 
 func observeExecutionPlan(plan *llm.ExecutionPlan) *llm.ExecutionPlan {

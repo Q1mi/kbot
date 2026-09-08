@@ -27,6 +27,7 @@ type ExecutionPlan struct {
 type Gateway struct {
 	model   model.BaseChatModel
 	timeout time.Duration
+	name    string
 }
 
 func NewGateway(cfg config.Config) (*Gateway, error) {
@@ -39,7 +40,7 @@ func NewGateway(cfg config.Config) (*Gateway, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create chat model: %w", err)
 	}
-	return &Gateway{model: chatModel, timeout: cfg.LLMTimeout}, nil
+	return &Gateway{model: chatModel, timeout: cfg.LLMTimeout, name: cfg.LLMModel}, nil
 }
 
 func (g *Gateway) Generate(
@@ -85,7 +86,7 @@ func (g *Gateway) PrepareExecution(ctx context.Context, profile modelconfig.Prof
 		if err != nil {
 			return nil, fmt.Errorf("deployment %d: %w", index, err)
 		}
-		models = append(models, selected)
+		models = append(models, &Gateway{model: selected, timeout: g.timeout, name: deployment.Model})
 		if deployment.MaxRetries > maxRetries {
 			maxRetries = deployment.MaxRetries
 		}
@@ -119,4 +120,14 @@ func supportedProvider(provider string) bool {
 	default:
 		return false
 	}
+}
+
+// ModelName exposes only the configured model identity, without provider credentials.
+func (g *Gateway) ModelName() string { return g.name }
+
+func ModelName(m model.BaseChatModel) string {
+	if named, ok := m.(interface{ ModelName() string }); ok {
+		return named.ModelName()
+	}
+	return ""
 }

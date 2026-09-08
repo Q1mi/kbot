@@ -10,6 +10,10 @@ test:
 run:
 	go run ./cmd/server
 
+.PHONY: langfuse-demo
+langfuse-demo:
+	go run ./cmd/langfuse-demo
+
 doubao-check:
 	@test -n "$$ARK_API_KEY" || (echo "ARK_API_KEY is required" && exit 1)
 	go test -tags=integration -run TestDoubaoGenerate -v ./internal/runtime/llm

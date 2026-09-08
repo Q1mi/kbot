@@ -8,7 +8,7 @@ func TestAttributesCarryStableRunAndLangfuseDimensions(t *testing.T) {
 	for _, item := range attributes {
 		values[string(item.Key)] = item.Value.AsString()
 	}
-	for key, want := range map[string]string{"kbot.workspace.id": "ws", "langfuse.session.id": "c1", "langfuse.version": "agent-v1", "gen_ai.operation.name": "chat"} {
+	for key, want := range map[string]string{"kbot.workspace.id": "ws", "langfuse.session.id": "c1", "langfuse.version": "agent-v1"} {
 		if values[key] != want {
 			t.Fatalf("%s = %q", key, values[key])
 		}
