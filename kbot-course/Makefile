@@ -1,4 +1,15 @@
-.PHONY: logistics-mock-run build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test doubao-check
+.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test doubao-check logistics-mock-run a2a-demo lesson21-test
+
+logistics-mock-run:
+	go run ./cmd/logistics-mock $(ARGS)
+
+a2a-demo:
+	go run ./cmd/lesson21-demo $(ARGS)
+
+
+lesson21-test:
+	go test ./internal/demo/... ./internal/runtime/tooling ./cmd/lesson21-demo ./cmd/logistics-mock
+
 
 build:
 	@mkdir -p bin
@@ -35,6 +46,3 @@ crossborder-build:
 
 crossborder-test:
 	$(MAKE) -C projects/crossborder test
-
-logistics-mock-run:
-	go run ./cmd/logistics-mock $(ARGS)

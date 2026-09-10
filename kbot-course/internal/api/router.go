@@ -303,6 +303,7 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				var endpoint struct {
 					URL     string `json:"url"`
 					SDKName string `json:"sdk_name"`
+					CardURL string `json:"card_url"`
 				}
 				if err := json.Unmarshal([]byte(req.EndpointConfig), &endpoint); err != nil {
 					http.Error(w, "invalid endpoint_config", http.StatusBadRequest)
@@ -312,6 +313,8 @@ func NewRouterWithControlPlane(iamService *iam.Service, runtime ChatRuntime, con
 				executableEndpoint := endpoint.URL
 				if req.SourceType == "internal_sdk" {
 					executableEndpoint = endpoint.SDKName
+				} else if req.SourceType == "a2a" {
+					executableEndpoint = endpoint.CardURL
 				}
 				version := platformtool.Version{
 					ID: versionID, ToolID: versionID,
