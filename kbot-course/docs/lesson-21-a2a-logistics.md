@@ -489,7 +489,7 @@ make lesson21-test
 
 第 22 课使用 `internal/demo/lesson21.NewRuntime` 复用本课物流助手，将飞书消息转换成 Runtime 输入，并把回答发送回原消息。A2A 的调用和业务版本约束继续沿用本课实现。
 
-- 第 22 课：飞书创建应用与接入 kbot（切换到 `22-end` 阅读课件）
+- [第 22 课：飞书创建应用与接入 kbot](lesson-22-feishu-kbot.md)
 - [A2A 规范](https://a2a-protocol.org/latest/specification/)
 - [A2A 核心概念](https://a2a-protocol.org/latest/topics/key-concepts/)
 - [A2A 1.0 变更](https://a2a-protocol.org/latest/whats-new-v1/)

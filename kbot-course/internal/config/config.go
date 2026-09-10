@@ -19,6 +19,12 @@ type Config struct {
 	SandboxRunnerURL   string
 	SandboxRunnerToken string
 	DatabaseURL        string
+	LarkAppID          string
+	LarkAppSecret      string
+	LarkTenantKey      string
+	ChannelWorkspaceID string
+	ChannelAgentID     string
+	ChannelAgentEnv    string
 }
 
 func Load() Config {
@@ -33,6 +39,12 @@ func Load() Config {
 		SandboxRunnerURL:   valueOrDefault("KBOT_SANDBOX_RUNNER_URL", "http://127.0.0.1:8081"),
 		SandboxRunnerToken: os.Getenv("KBOT_SANDBOX_RUNNER_TOKEN"),
 		DatabaseURL:        valueOrDefault("KBOT_DATABASE_URL", "postgres://kbot:kbot@127.0.0.1:5432/kbot?sslmode=disable"),
+		LarkAppID:          strings.TrimSpace(os.Getenv("KBOT_LARK_APP_ID")),
+		LarkAppSecret:      strings.TrimSpace(os.Getenv("KBOT_LARK_APP_SECRET")),
+		LarkTenantKey:      strings.TrimSpace(os.Getenv("KBOT_LARK_TENANT_KEY")),
+		ChannelWorkspaceID: os.Getenv("KBOT_CHANNEL_WORKSPACE_ID"),
+		ChannelAgentID:     os.Getenv("KBOT_CHANNEL_AGENT_ID"),
+		ChannelAgentEnv:    valueOrDefault("KBOT_CHANNEL_AGENT_ENV", "prod"),
 	}
 }
 
@@ -60,6 +72,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.SandboxRunnerToken) < 32 {
 		return fmt.Errorf("KBOT_SANDBOX_RUNNER_TOKEN must contain at least 32 characters")
+	}
+	if (c.LarkAppID == "") != (c.LarkAppSecret == "") {
+		return fmt.Errorf("KBOT_LARK_APP_ID and KBOT_LARK_APP_SECRET must be configured together")
+	}
+	if c.LarkAppID != "" && (strings.TrimSpace(c.ChannelWorkspaceID) == "" || strings.TrimSpace(c.ChannelAgentID) == "") {
+		return fmt.Errorf("Feishu requires KBOT_CHANNEL_WORKSPACE_ID and KBOT_CHANNEL_AGENT_ID")
 	}
 	return nil
 }

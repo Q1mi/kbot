@@ -109,4 +109,4 @@ make a2a-demo ARGS='-live-model -message "查询 CB-1001"'
 make lesson21-test
 ```
 
-正式讲解见[第 21 课课件](../../docs/lesson-21-a2a-logistics.md)。下一课在同一个物流 Runtime 上增加飞书入口，请切换到 `22-end` 阅读 `examples/lesson22/README.md`。
+正式讲解见[第 21 课课件](../../docs/lesson-21-a2a-logistics.md)。下一课在同一个物流 Runtime 上增加飞书入口，见[第 22 课示例](../lesson22/README.md)。

@@ -14,6 +14,8 @@ import (
 	"github.com/Q1mi/kbot/internal/config"
 	courseotel "github.com/Q1mi/kbot/internal/infrastructure/otel"
 	postgresinfra "github.com/Q1mi/kbot/internal/infrastructure/postgres"
+	"github.com/Q1mi/kbot/internal/integration"
+	"github.com/Q1mi/kbot/internal/integration/lark"
 	"github.com/Q1mi/kbot/internal/platform/agent"
 	"github.com/Q1mi/kbot/internal/platform/approval"
 	"github.com/Q1mi/kbot/internal/platform/audit"
@@ -102,9 +104,12 @@ func main() {
 		Handler: api.NewRouterWithControlPlane(iamService, runtime, api.ControlPlane{
 			Agents: agents, Approvals: approvals, Audit: auditLedger, Tools: toolRegistry, KBs: knowledgeBases, Search: knowledgeSearch,
 			Prompts: prompts, Profiles: profiles, Skills: skills, Guard: guards,
-			Evaluator: evaluator, EvalData: evalData, ApprovalWorker: approvalWorker,
+			Evaluator: evaluator, EvalData: evalData,
+			ApprovalWorker: approvalWorker,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -113,6 +118,28 @@ func main() {
 		syscall.SIGTERM,
 	)
 	defer stop()
+	if cfg.LarkAppID != "" {
+		if _, err := agents.ResolveVersion(ctx, cfg.ChannelWorkspaceID, cfg.ChannelAgentID, cfg.ChannelAgentEnv); err != nil {
+			log.Fatalf("Feishu channel target: %v", err)
+		}
+		dialogue, err := integration.NewDialogue(agents, runtime, cfg.ChannelWorkspaceID, cfg.ChannelAgentID, cfg.ChannelAgentEnv)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bot, err := lark.NewBot(lark.BotConfig{AppID: cfg.LarkAppID, AppSecret: cfg.LarkAppSecret, TenantKey: cfg.LarkTenantKey}, dialogue, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		botDone := make(chan struct{})
+		defer func() { stop(); <-botDone }()
+		go func() {
+			defer close(botDone)
+			if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("Feishu bot stopped: %v", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		if err := approvalWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("approval worker stopped: %v", err)
