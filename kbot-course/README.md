@@ -4,6 +4,7 @@
 
 - [课程地图](docs/course-map.md)
 - [第 21 课：A2A 协议与物流示例](docs/lesson-21-a2a-logistics.md) · [运行说明](examples/lesson21/README.md)
+- [第 22 课：飞书创建应用与接入 kbot](docs/lesson-22-feishu-kbot.md) · [运行说明](examples/lesson22/README.md)
 
 第 21 课可直接打开两个终端演示：
 
@@ -14,7 +15,7 @@ make logistics-mock-run
 make a2a-demo
 ```
 
-第 22 课将在本课基础上增加飞书消息接入，请切换到对应课时快照。
+第 22 课飞书接入在本地配置 `KBOT_LARK_APP_ID`、`KBOT_LARK_APP_SECRET` 后运行 `make feishu-demo`。应用权限、长连接订阅和发布步骤见第 22 课示例文档。使用 `ARGS='-live-model'` 可切换到配置的大模型。
 
 ## 豆包模型准备
 

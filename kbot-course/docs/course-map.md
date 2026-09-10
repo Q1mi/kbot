@@ -31,7 +31,7 @@
 | 19 | Trace 与审计 | OTel Trace 和可验证的审计链 | `internal/infrastructure/otel`、`internal/platform/audit` | `go test ./internal/infrastructure/otel ./internal/platform/audit ./internal/runtime/engine` |
 | 20 | Eval 发布门禁 | Dataset、Judge、通过率计算和版本发布约束 | `internal/platform/eval` | `go test ./internal/platform/eval ./internal/platform/agent ./internal/api` |
 | 21 | [A2A 协议及物流示例](lesson-21-a2a-logistics.md) | AgentCard、SendMessage、外部物流 Mock、工具版本与身份边界 | `internal/runtime/tooling/a2a.go`、`internal/demo/lesson21`、`cmd/lesson21-demo` | `make lesson21-test`；`make logistics-mock-run` + `make a2a-demo` |
-| 22 | 飞书创建应用与接入 kbot | 企业自建应用、长连接、消息身份映射、Runtime 调用与回复 | `cmd/lesson22-demo`、`internal/integration/lark`、`internal/integration/dialogue.go` | `make lesson22-test`；配置应用后执行 `make feishu-demo` |
+| 22 | [飞书创建应用与接入 kbot](lesson-22-feishu-kbot.md) | 企业自建应用、长连接、消息身份映射、Runtime 调用与回复 | `cmd/lesson22-demo`、`internal/integration/lark`、`internal/integration/dialogue.go` | `make lesson22-test`；配置应用后执行 `make feishu-demo` |
 | 23 | 最终交付 | Admin、Compose、CI 和完整 Sandbox 环境 | `deploy`、`web/admin`、`.github/workflows` | `make verify` |
 
 ## 课程阶段
