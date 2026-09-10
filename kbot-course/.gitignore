@@ -6,7 +6,6 @@
 coverage.out
 bin/
 projects/crossborder/bin/
-projects/insurance/bin/
 
 # Admin Console 依赖与构建产物
 web/admin/node_modules/

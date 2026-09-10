@@ -30,8 +30,8 @@
 | 18 | Guard 安全管线 | 输入输出 Hook、PII 处理和 Workspace 动态规则 | `internal/runtime/guard` | `go test ./internal/runtime/guard ./internal/api` |
 | 19 | Trace 与审计 | OTel Trace 和可验证的审计链 | `internal/infrastructure/otel`、`internal/platform/audit` | `go test ./internal/infrastructure/otel ./internal/platform/audit ./internal/runtime/engine` |
 | 20 | Eval 发布门禁 | Dataset、Judge、通过率计算和版本发布约束 | `internal/platform/eval` | `go test ./internal/platform/eval ./internal/platform/agent ./internal/api` |
-| 21 | Team 与开放协议 | AgentTool Supervisor、Eino MCP Adapter、A2A、Webhook 和飞书 | `internal/runtime/team`、`internal/runtime/tooling`、`internal/integration` | `go test ./internal/runtime/team ./internal/platform/team ./internal/runtime/tooling ./internal/integration/...` |
-| 22 | 保险场景迁移 | 理赔责任、赔款计算和反欺诈分流 | `projects/insurance` | `make -C projects/insurance test` |
+| 21 | [A2A 协议及物流示例](lesson-21-a2a-logistics.md) | AgentCard、SendMessage、外部物流 Mock、工具版本与身份边界 | `internal/runtime/tooling/a2a.go`、`internal/demo/lesson21`、`cmd/lesson21-demo` | `make lesson21-test`；`make logistics-mock-run` + `make a2a-demo` |
+| 22 | 飞书创建应用与接入 kbot | 企业自建应用、长连接、消息身份映射、Runtime 调用与回复 | `cmd/lesson22-demo`、`internal/integration/lark`、`internal/integration/dialogue.go` | `make lesson22-test`；配置应用后执行 `make feishu-demo` |
 | 23 | 最终交付 | Admin、Compose、CI 和完整 Sandbox 环境 | `deploy`、`web/admin`、`.github/workflows` | `make verify` |
 
 ## 课程阶段
@@ -42,10 +42,13 @@
 | Runtime 主循环 | 05–09 | 模型、流式、Tool 版本、安全执行和 ReAct |
 | 知识与配置快照 | 10–14 | RAG、Prompt、模型、Skill、Agent Version 与 Conversation |
 | 持久化与人在环 | 15–17 | PostgreSQL、Checkpoint、A2UI 与恢复执行 |
-| 治理与开放能力 | 18–21 | Guard、Trace、Audit、Eval、Team 和协议集成 |
-| 迁移与交付 | 22–23 | 第二业务验证与 Docker Compose 总装 |
+| 安全与治理 | 18–20 | Guard、Trace、Audit、Eval |
+| 外部服务与消息接入 | 21–22 | A2A 外部 Agent 调用与飞书消息收发 |
+| 最终交付 | 23 | 保留原有 Admin、Compose、CI 和 Sandbox 交付 |
 
 ## 标签使用
+
+第 21、22 课的新旧范围与起止快照见[代码快照说明](lesson-snapshots.md)。第 23 课保持原提交和文件树。
 
 开始某一课：
 
@@ -60,4 +63,4 @@ git switch -c practice/09
 git diff 09-end -- .
 ```
 
-第 02、03、22 课包含独立 Go Module，测试时进入对应项目，或使用根 Makefile 提供的目标。
+第 02、03 课的跨境业务包含独立 Go Module，测试时进入对应项目，或使用根 Makefile 提供的目标。新第 21、22 课均使用根 Go Module。第 23 课保留原快照，其中既有场景服务与交付检查继续使用该快照的配置。

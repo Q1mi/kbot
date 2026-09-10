@@ -3,6 +3,18 @@
 ## 课程资料
 
 - [课程地图](docs/course-map.md)
+- [第 21 课：A2A 协议与物流示例](docs/lesson-21-a2a-logistics.md) · [运行说明](examples/lesson21/README.md)
+
+第 21 课可直接打开两个终端演示：
+
+```bash
+# 终端 A：外部物流服务
+make logistics-mock-run
+# 终端 B：kbot Runtime 通过 A2A 查询物流
+make a2a-demo
+```
+
+第 22 课将在本课基础上增加飞书消息接入，请切换到对应课时快照。
 
 ## 豆包模型准备
 
@@ -39,7 +51,7 @@ Runner 需要本机 Docker daemon，并会为每次 Python/Bash 调用创建一�
 - `XX-start`：本课开始前可编译、可测试的代码；
 - `XX-end`：完成本课核心实现并通过验收的代码。
 
-## 当前起点
+## 第 01 课起点
 
 `01-start` 只提供：
 

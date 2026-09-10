@@ -48,7 +48,7 @@ export function AgentDetailPage() {
   const confirmPromote = (version: AgentVersion, env: string) => {
     Modal.confirm({
       title: `将 v${version.version} 晋升到 ${env}`,
-      content: env === 'prod' ? '新会话和引用 prod 环境的 Team 将使用该版本。' : '环境指针会立即更新。',
+      content: env === 'prod' ? '新会话将使用该版本。' : '环境指针会立即更新。',
       okText: '确认晋升',
       okButtonProps: env === 'prod' ? { danger: true } : undefined,
       onOk: () => promote.mutateAsync({ version, env }),

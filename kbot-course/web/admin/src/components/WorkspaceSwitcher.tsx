@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { listWorkspaces } from '@/api/iam'
 import { useAuthStore } from '@/store/authStore'
 
-// 顶栏工作空间切换器:Agents / Teams 等列表按 X-Workspace-ID 过滤,
+// 顶栏工作空间切换器:Agents 等列表按 X-Workspace-ID 过滤,
 // 必须先选一个工作空间。无选中时自动挑第一个。
 export function WorkspaceSwitcher() {
   const { workspaceId, setWorkspace } = useAuthStore()

@@ -8,7 +8,6 @@ import { UsersPage } from '@/pages/UsersPage'
 import { AgentsPage } from '@/pages/AgentsPage'
 import { AgentDetailPage } from '@/pages/AgentDetailPage'
 import { ConversationsPage } from '@/pages/ConversationsPage'
-import { TeamsPage } from '@/pages/TeamsPage'
 import { PromptsPage } from '@/pages/PromptsPage'
 import { PromptDetailPage } from '@/pages/PromptDetailPage'
 import { SkillsPage } from '@/pages/SkillsPage'
@@ -30,7 +29,6 @@ const REAL_PAGES: Record<string, ReactNode> = {
   users: <UsersPage />,
   agents: <AgentsPage />,
   conversations: <ConversationsPage />,
-  teams: <TeamsPage />,
   prompts: <PromptsPage />,
   models: <ModelsPage />,
   skills: <SkillsPage />,

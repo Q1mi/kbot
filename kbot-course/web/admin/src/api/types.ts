@@ -57,35 +57,6 @@ export interface AgentVersion {
   created_at: string
 }
 
-export interface TeamMember {
-  agent_id: string
-  agent_version_id?: string
-  role: string
-}
-
-export interface Team {
-  id: string
-  workspace_id: string
-  name: string
-  mode: string
-  created_at: string
-}
-
-export interface CreateTeamRequest {
-  name: string
-  mode: string
-  members: TeamMember[]
-}
-
-export interface TeamVersion {
-  id: string
-  team_id: string
-  version: number
-  members: TeamMember[]
-  environments: string[]
-  created_at: string
-}
-
 export interface Message {
   id?: string
   conversation_id?: string

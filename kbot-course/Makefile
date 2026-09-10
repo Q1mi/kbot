@@ -1,4 +1,4 @@
-.PHONY: build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test doubao-check
+.PHONY: logistics-mock-run build test run sandbox-runner-build sandbox-runner-run migrate-up migrate-down admin-build crossborder-build crossborder-test doubao-check
 
 build:
 	@mkdir -p bin
@@ -35,3 +35,6 @@ crossborder-build:
 
 crossborder-test:
 	$(MAKE) -C projects/crossborder test
+
+logistics-mock-run:
+	go run ./cmd/logistics-mock $(ARGS)

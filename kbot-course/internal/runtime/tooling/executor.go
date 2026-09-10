@@ -252,7 +252,7 @@ func (e *Executor) Bind(ctx context.Context, workspaceID string, versionIDs []st
 			Name: version.Name, VersionID: version.ID,
 			SourceType:      version.SourceType,
 			Info:            &schema.ToolInfo{Name: version.Name, Desc: version.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(params)},
-			RequiresNetwork: version.SourceType == "rest_api" || version.SourceType == "mcp_server" || version.SourceType == "a2a" || version.SourceType == "",
+			RequiresNetwork: version.SourceType == "rest_api" || version.SourceType == "a2a" || version.SourceType == "",
 			KBScoped:        version.SourceType == "internal_sdk" && version.Endpoint == "search_knowledge_base",
 			Sensitive:       version.Sensitive,
 		})
