@@ -2,6 +2,7 @@
 
 ## 课程资料
 
+- [课件索引](docs/README.md)：集中阅读各课程标签中的 Markdown 课件。
 - [课程地图](docs/course-map.md)
 
 ## 豆包模型准备
